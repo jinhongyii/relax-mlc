@@ -31,8 +31,6 @@ from tvm.script.parser import ir as I
 from tvm.script.parser import relax as R
 from tvm.script.parser import tir as T
 
-pytest.skip("need printer fix", allow_module_level=True)
-
 
 def _check(
     parsed: Union[relax.Function, IRModule],

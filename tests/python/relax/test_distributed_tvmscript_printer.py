@@ -101,7 +101,6 @@ def test_func():
     _assert_print(
         TestModule["foo"],
         """
-# from tvm.script import ir as I
 # from tvm.script import relax as R
 
 @R.function
