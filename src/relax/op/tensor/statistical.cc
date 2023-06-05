@@ -31,7 +31,15 @@ namespace tvm {
 namespace relax {
 
 StructInfo InferStructInfoStatistical(const Call& call, const BlockBuilder& ctx) {
-  TensorStructInfo data_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
+  Array<TensorStructInfo> input_tensor_sinfos = GetInputTensorStructInfoNoFatal(call, ctx);
+  bool is_tensor_input = !input_tensor_sinfos.empty(); 
+  Array<distributed::DTensorStructInfo> input_dtensor_sinfos = GetInputDTensorStructInfo(call, ctx);
+  TensorStructInfo data_sinfo;
+  if (is_tensor_input){
+    data_sinfo = input_tensor_sinfos[0];
+  } else {
+    data_sinfo = input_dtensor_sinfos[0]->tensor_sinfo;
+  } 
   const auto* attrs = call->attrs.as<StatisticalAttrs>();
 
   std::vector<int> axes;
@@ -59,28 +67,35 @@ StructInfo InferStructInfoStatistical(const Call& call, const BlockBuilder& ctx)
   // - axes is not None, keepdims is true -> the returned shape has value 1 at the positions of the
   // input axes
   const auto* data_shape = data_sinfo->shape.as<ShapeExprNode>();
+  TensorStructInfo output_tensor_sinfo;
   if (data_shape == nullptr) {
     if (!attrs->axis.defined() && attrs->keepdims && out_ndim != kUnknownNDim) {
-      return TensorStructInfo(
+      output_tensor_sinfo = TensorStructInfo(
           ShapeExpr(Array<PrimExpr>(out_ndim, IntImm(DataType::Int(64), /*value=*/1))),
           data_sinfo->dtype);
     } else {
-      return out_ndim == 0 ? TensorStructInfo(ShapeExpr(Array<PrimExpr>()), data_sinfo->dtype)
+      output_tensor_sinfo = out_ndim == 0 ? TensorStructInfo(ShapeExpr(Array<PrimExpr>()), data_sinfo->dtype)
                            : TensorStructInfo(data_sinfo->dtype, out_ndim);
     }
   }
-
-  Array<PrimExpr> out_shape;
-  out_shape.reserve(out_ndim);
-  for (int i = 0; i < data_sinfo->ndim; ++i) {
-    if (attrs->axis.defined() && std::find(axes.begin(), axes.end(), i) == axes.end()) {
-      out_shape.push_back(data_shape->values[i]);
-    } else if (attrs->keepdims) {
-      out_shape.push_back(IntImm(DataType::Int(64), /*value=*/1));
+  if(!output_tensor_sinfo.defined()){
+    Array<PrimExpr> out_shape;
+    out_shape.reserve(out_ndim);
+    for (int i = 0; i < data_sinfo->ndim; ++i) {
+      if (attrs->axis.defined() && std::find(axes.begin(), axes.end(), i) == axes.end()) {
+        out_shape.push_back(data_shape->values[i]);
+      } else if (attrs->keepdims) {
+        out_shape.push_back(IntImm(DataType::Int(64), /*value=*/1));
+      }
     }
+    ICHECK_EQ(static_cast<int>(out_shape.size()), out_ndim);
+    output_tensor_sinfo = TensorStructInfo(ShapeExpr(out_shape), data_sinfo->dtype);
   }
-  ICHECK_EQ(static_cast<int>(out_shape.size()), out_ndim);
-  return TensorStructInfo(ShapeExpr(out_shape), data_sinfo->dtype);
+  if(is_tensor_input){
+    return output_tensor_sinfo;
+  }
+  distributed::ShardingPlan output_sharding_plan = InferShardingPlan(call, ctx, output_tensor_sinfo, distributed::BuildAxisGraphReduce);
+  return distributed::DTensorStructInfo(output_tensor_sinfo, output_sharding_plan.first, output_sharding_plan.second);
 }
 
 InferLayoutOutput InferLayoutStatistical(const Call& call,

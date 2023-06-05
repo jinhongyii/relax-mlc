@@ -509,14 +509,26 @@ bool IsIdentityPermutation(const std::vector<int>& permutation) {
 }
 
 StructInfo InferStructInfoPermuteDims(const Call& call, const BlockBuilder& ctx) {
-  TensorStructInfo data_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
+  Array<TensorStructInfo> input_tensor_sinfos = GetInputTensorStructInfoNoFatal(call, ctx);
+  bool is_tensor_input = !input_tensor_sinfos.empty(); 
+  Array<distributed::DTensorStructInfo> input_dtensor_sinfos = GetInputDTensorStructInfo(call, ctx);
+  TensorStructInfo data_sinfo;
+  if(is_tensor_input){
+    data_sinfo = input_tensor_sinfos[0];
+  } else {
+    data_sinfo = input_dtensor_sinfos[0]->tensor_sinfo;
+  }
 
   const auto* attrs = call->attrs.as<PermuteDimsAttrs>();
 
   // Todo(relax-team): revisit here for better check on if the input tensor has
   // ndim same as the number of input axes.
   if (!attrs->axes.defined() && data_sinfo->IsUnknownNdim()) {
-    return TensorStructInfo(data_sinfo->dtype, kUnknownNDim);
+    if(is_tensor_input){
+      return TensorStructInfo(data_sinfo->dtype, kUnknownNDim);
+    } else {
+      LOG(FATAL) << "DTensorStructInfo must have known ndim";
+    }
   }
 
   if (attrs->axes.defined()) {
@@ -538,19 +550,32 @@ StructInfo InferStructInfoPermuteDims(const Call& call, const BlockBuilder& ctx)
     std::iota(axes.rbegin(), axes.rend(), 0);
   }
   if (IsIdentityPermutation(axes)) {
-    return data_sinfo;
+    if(is_tensor_input){
+      return data_sinfo;
+    } else {
+      return input_dtensor_sinfos[0];
+    }
   }
 
   const auto* data_shape = data_sinfo->shape.as<ShapeExprNode>();
   if (data_shape == nullptr) {
-    return TensorStructInfo(data_sinfo->dtype, data_sinfo->ndim);
+    if(is_tensor_input){
+      return TensorStructInfo(data_sinfo->dtype, data_sinfo->ndim);
+    } else {
+      LOG(FATAL) << "DTensorStructInfo must have known shape";
+    }
   }
   std::vector<PrimExpr> new_shape;
   new_shape.reserve(data_sinfo->ndim);
   for (int i = 0; i < data_sinfo->ndim; ++i) {
     new_shape.push_back(data_shape->values[axes[i]]);
   }
-  return TensorStructInfo(ShapeExpr(new_shape), data_sinfo->dtype);
+  TensorStructInfo output_tensor_sinfo(ShapeExpr(new_shape), data_sinfo->dtype);
+  if(is_tensor_input){
+    return output_tensor_sinfo;
+  }
+  distributed::ShardingPlan output_sharding_plan = InferShardingPlan(call, ctx, output_tensor_sinfo, distributed::BuildAxisGraphPermuteDims);
+  return distributed::DTensorStructInfo(output_tensor_sinfo, output_sharding_plan.first, output_sharding_plan.second);
 }
 
 InferLayoutOutput InferLayoutPermuteDims(const Call& call,

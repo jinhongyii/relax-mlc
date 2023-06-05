@@ -46,6 +46,44 @@ Array<TensorStructInfo> GetInputTensorStructInfo(const Call& call, const BlockBu
   return input_tensor_sinfo;
 }
 
+Array<TensorStructInfo> GetInputTensorStructInfoNoFatal(const Call& call, const BlockBuilder& ctx) {
+  Op op = Downcast<Op>(call->op);
+  int n_input = op->arguments.size();
+  if (static_cast<int>(call->args.size()) != n_input) {
+    ctx->ReportFatal(Diagnostic::Error(call)
+                     << op << " op should have " << n_input << " arguments");
+  }
+  Array<TensorStructInfo> input_tensor_sinfo;
+  input_tensor_sinfo.reserve(n_input);
+  for (int i = 0; i < n_input; ++i) {
+    const auto* sinfo = GetStructInfoAs<TensorStructInfoNode>(call->args[i]);
+    if (sinfo == nullptr) {
+      return {};
+    }
+    input_tensor_sinfo.push_back(GetRef<TensorStructInfo>(sinfo));
+  }
+  return input_tensor_sinfo;
+}
+
+Array<distributed::DTensorStructInfo> GetInputDTensorStructInfo(const Call& call, const BlockBuilder& ctx) {
+  Op op = Downcast<Op>(call->op);
+  int n_input = op->arguments.size();
+  if (static_cast<int>(call->args.size()) != n_input) {
+    ctx->ReportFatal(Diagnostic::Error(call)
+                     << op << " op should have " << n_input << " arguments");
+  }
+  Array<distributed::DTensorStructInfo> input_tensor_sinfo;
+  input_tensor_sinfo.reserve(n_input);
+  for (int i = 0; i < n_input; ++i) {
+    const auto* sinfo = GetStructInfoAs<distributed::DTensorStructInfoNode>(call->args[i]);
+    if (sinfo == nullptr) {
+      return {};
+    }
+    input_tensor_sinfo.push_back(GetRef<distributed::DTensorStructInfo>(sinfo));
+  }
+  return input_tensor_sinfo;
+}
+
 Array<TensorStructInfo> GetTensorStructInfoFromTuple(const Call& call, const BlockBuilder& ctx,
                                                      const Expr& tup) {
   const auto* tuple_sinfo = GetStructInfoAs<TupleStructInfoNode>(tup);
@@ -148,6 +186,46 @@ InferLayoutOutput InferLayoutUnaryEwise(const Call& call,
   ICHECK(NoDesiredLayout(call, desired_layouts));
   LayoutDecision layout = GetLayoutDecision(var_layout_map, call->args[0]);
   return InferLayoutOutput({layout}, {layout}, Attrs(call->attrs));
+}
+
+distributed::ShardingPlan InferShardingPlan(const Call& call, const BlockBuilder& ctx, const TensorStructInfo& output_tensor_sinfo, distributed::FBuildAxisGraph f_build_graph){
+  Array<distributed::DTensorStructInfo> input_dtensor_sinfos = GetInputDTensorStructInfo(call, ctx);
+  for (int i = 1; i< input_dtensor_sinfos.size(); i++){
+    ICHECK(StructuralEqual()(input_dtensor_sinfos[0]->device_mesh,
+                             input_dtensor_sinfos[i]->device_mesh));
+  }
+
+  Var output_var("output", output_tensor_sinfo);
+  distributed::AxisGroupGraph axis_group_graph;
+  f_build_graph(output_var, call, &axis_group_graph);
+  int n_input_var = call->args.size();
+  ICHECK(input_dtensor_sinfos.size() == n_input_var);
+  distributed::AxisGroupToShardingPlanSetMap axis_group_to_sharding_plan_set;
+  for (int i = 0; i < n_input_var; i++){
+    distributed::DTensorStructInfo dtensor_sinfo = input_dtensor_sinfos[i];
+    Var input_var = Downcast<Var>(call->args[i]);
+    int ndim = dtensor_sinfo->tensor_sinfo->ndim;
+    for (int j = 0; j < ndim; j++){
+      if(dtensor_sinfo->placement->dim_specs[j]->kind!=distributed::PlacementSpecKind::kSharding){
+        continue;
+      }
+      distributed::AxisGroup axis_group = axis_group_graph.GetAxisGroup({input_var.get(), j});
+      axis_group_to_sharding_plan_set[axis_group].insert({dtensor_sinfo->device_mesh, dtensor_sinfo->placement->dim_specs[j]});
+    }
+  }
+
+  Array<distributed::PlacementSpec> output_placement_specs;
+  for (int i = 0; i < output_tensor_sinfo->ndim; i++){
+    distributed::AxisGroup axis_group = axis_group_graph.GetAxisGroup({output_var.get(), i});
+    if(axis_group_to_sharding_plan_set.count(axis_group)){
+      distributed::AxisShardingPlanSet sharding_plan_set = axis_group_to_sharding_plan_set[axis_group];
+      ICHECK(sharding_plan_set.size() == 1);
+      output_placement_specs.push_back(sharding_plan_set.begin()->second);
+    } else {
+      output_placement_specs.push_back(distributed::PlacementSpec::Replica());
+    }
+  } 
+  return {input_dtensor_sinfos[0]->device_mesh, distributed::Placement(output_placement_specs)};
 }
 
 }  // namespace relax

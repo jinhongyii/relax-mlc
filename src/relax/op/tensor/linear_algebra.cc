@@ -47,9 +47,18 @@ Expr matmul(Expr x1, Expr x2, DataType out_dtype) {
 TVM_REGISTER_GLOBAL("relax.op.matmul").set_body_typed(matmul);
 
 StructInfo InferStructInfoMatmul(const Call& call, const BlockBuilder& ctx) {
-  Array<TensorStructInfo> input_sinfo = GetInputTensorStructInfo(call, ctx);
-  TensorStructInfo x1_sinfo = input_sinfo[0];
-  TensorStructInfo x2_sinfo = input_sinfo[1];
+  Array<TensorStructInfo> input_tensor_sinfos = GetInputTensorStructInfoNoFatal(call, ctx);
+  bool is_tensor_input = !input_tensor_sinfos.empty(); 
+  Array<distributed::DTensorStructInfo> input_dtensor_sinfos = GetInputDTensorStructInfo(call, ctx);
+  TensorStructInfo x1_sinfo, x2_sinfo;
+  if(is_tensor_input){
+    x1_sinfo = input_tensor_sinfos[0];
+    x2_sinfo = input_tensor_sinfos[1];
+  } else{
+    x1_sinfo = input_dtensor_sinfos[0]->tensor_sinfo;
+    x2_sinfo = input_dtensor_sinfos[1]->tensor_sinfo;
+  }
+
 
   const auto* attrs = call->attrs.as<MatmulAttrs>();
   DataType out_dtype = attrs->out_dtype.is_void()
@@ -82,7 +91,10 @@ StructInfo InferStructInfoMatmul(const Call& call, const BlockBuilder& ctx) {
   const auto* x1_shape = x1_sinfo->shape.as<ShapeExprNode>();
   const auto* x2_shape = x2_sinfo->shape.as<ShapeExprNode>();
   if (x1_shape == nullptr || x2_shape == nullptr) {
-    return TensorStructInfo(out_dtype, output_ndim);
+    if(is_tensor_input){
+      return TensorStructInfo(out_dtype, output_ndim);
+    }
+    LOG(FATAL) << "DTensorStructInfo must have shape";
   }
 
   Array<PrimExpr> x1_shape_prefix{x1_shape->values.begin(),
@@ -92,7 +104,10 @@ StructInfo InferStructInfoMatmul(const Call& call, const BlockBuilder& ctx) {
   Optional<Array<PrimExpr>> output_shape_prefix =
       InferBinaryBroadcastShape(call, ctx, x1_shape_prefix, x2_shape_prefix);
   if (!output_shape_prefix.defined()) {
-    return TensorStructInfo(out_dtype, output_ndim);
+    if(is_tensor_input){
+      return TensorStructInfo(out_dtype, output_ndim);
+    }
+    LOG(FATAL) << "DTensorStructInfo must have shape";  
   }
 
   arith::Analyzer* analyzer = ctx->GetAnalyzer();
@@ -113,7 +128,12 @@ StructInfo InferStructInfoMatmul(const Call& call, const BlockBuilder& ctx) {
     output_shape.push_back(x2_shape->values[x2_ndim - 1]);
   }
   ICHECK_EQ(static_cast<int>(output_shape.size()), output_ndim);
-  return TensorStructInfo(ShapeExpr(output_shape), out_dtype);
+  TensorStructInfo output_tensor_sinfo(ShapeExpr(output_shape), out_dtype);
+  if(is_tensor_input){
+    return output_tensor_sinfo;
+  }
+  distributed::ShardingPlan output_sharding_plan = InferShardingPlan(call, ctx, output_tensor_sinfo, distributed::BuildAxisGraphMatmul);
+  return distributed::DTensorStructInfo(output_tensor_sinfo, output_sharding_plan.first, output_sharding_plan.second);
 }
 
 Call InferMixedPrecisionMatmul(const Call& call, const DataType& out_dtype) {

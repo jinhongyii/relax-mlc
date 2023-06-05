@@ -14,40 +14,19 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=wildcard-import, redefined-builtin
-"""Relax core operators."""
+# pylint: disable=invalid-name
+"""Relax distributed-related transformation passes."""
 
-# Operators
-from .base import *
-from .binary import *
-from .create import *
-from .datatype import *
-from .index import *
-from .linear_algebra import *
-from .manipulate import *
-from .op_attrs import *
-from .statistical import *
-from .search import *
-from .set import *
-from .ternary import *
-from .unary import *
-from . import builtin
-from . import distributed
-from . import grad
-from . import image
-from . import memory
-from . import nn
+import tvm.ir
+from . import _ffi_api
 
-# Operator gradient functions
-from . import _op_gradient
+def PropagateSharding() -> tvm.ir.transform.Pass:
+    """Propagate sharding information.
 
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered pass
+    """
+    return _ffi_api.PropagateSharding()  # type: ignore
 
-def _register_op_make():
-    # pylint: disable=import-outside-toplevel
-    from . import _ffi_api
-    from .. import expr
-
-    expr._op_ffi_api = _ffi_api  # type: ignore
-
-
-_register_op_make()

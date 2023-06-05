@@ -27,6 +27,8 @@
 
 #include <tvm/arith/analyzer.h>
 #include <tvm/relax/op_attr_types.h>
+#include <tvm/relax/distributed/axis_group_graph.h>
+#include <tvm/relax/distributed/utils.h>
 #include <tvm/relay/expr.h>
 #include <tvm/relay/op.h>
 #include <tvm/tir/data_layout.h>
@@ -51,6 +53,11 @@ namespace relax {
  * to match the number of inputs of the op being called.
  */
 Array<TensorStructInfo> GetInputTensorStructInfo(const Call& call, const BlockBuilder& ctx);
+
+Array<TensorStructInfo> GetInputTensorStructInfoNoFatal(const Call& call, const BlockBuilder& ctx);
+
+Array<distributed::DTensorStructInfo> GetInputDTensorStructInfo(const Call& call,
+                                                                const BlockBuilder& ctx);
 
 /*!
  * \brief Get the tensor struct info of the unary operator input.
@@ -118,17 +125,33 @@ Array<TensorStructInfo> GetTensorStructInfoFromTuple(const Call& call, const Blo
 template <bool require_float_dtype, typename FType>
 inline StructInfo InferStructInfoUnary(const Call& call, const BlockBuilder& ctx,
                                        FType f_compute_out_dtype) {
-  TensorStructInfo input_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
-  if (require_float_dtype && !input_sinfo->IsUnknownDtype() && !input_sinfo->dtype.is_float()) {
+  Array<TensorStructInfo> input_tensor_sinfos = GetInputTensorStructInfoNoFatal(call, ctx);
+  TensorStructInfo input_tensor_sinfo;
+  distributed::DTensorStructInfo input_dtensor_sinfo;
+  bool is_tensor_input = !input_tensor_sinfos.empty();
+  if (input_tensor_sinfos.empty()) {
+    Array<distributed::DTensorStructInfo> input_dtensor_sinfos = GetInputDTensorStructInfo(call, ctx);
+    ICHECK(!input_dtensor_sinfos.empty());
+    input_dtensor_sinfo = input_dtensor_sinfos[0];
+    input_tensor_sinfo = input_dtensor_sinfo->tensor_sinfo;
+  } else {
+    input_tensor_sinfo = input_tensor_sinfos[0];
+  }
+  if (require_float_dtype && !input_tensor_sinfo->IsUnknownDtype() && !input_tensor_sinfo->dtype.is_float()) {
     ctx->ReportFatal(
         Diagnostic::Error(call)
         << call->op
         << " requires the input tensor to have float dtype. However, the given input dtype is "
-        << input_sinfo->dtype);
+        << input_tensor_sinfo->dtype);
   }
-  auto output_sinfo = make_object<TensorStructInfoNode>(*input_sinfo.get());
-  output_sinfo->dtype = f_compute_out_dtype(input_sinfo);
-  return TensorStructInfo(output_sinfo);
+  auto output_sinfo = make_object<TensorStructInfoNode>(*input_tensor_sinfo.get());
+  output_sinfo->dtype = f_compute_out_dtype(input_tensor_sinfo);
+  TensorStructInfo out_tensor_sinfo(output_sinfo);
+  if(is_tensor_input){
+    return out_tensor_sinfo;
+  } else{
+    return distributed::DTensorStructInfo(out_tensor_sinfo, input_dtensor_sinfo->device_mesh, input_dtensor_sinfo->placement);
+  }
 }
 
 /*!
@@ -213,6 +236,8 @@ inline DataType InferBinaryArithOpOutDtype(const Call& call, const BlockBuilder&
 Optional<Array<PrimExpr>> InferBinaryBroadcastShape(const Call& call, const BlockBuilder& ctx,
                                                     const Array<PrimExpr>& x1_shape,
                                                     const Array<PrimExpr>& x2_shape);
+
+distributed::ShardingPlan InferShardingPlan(const Call& call, const BlockBuilder& ctx, const TensorStructInfo& output_tensor_sinfo, distributed::FBuildAxisGraph f_build_graph);
 
 /*!
  * \brief Convert all axes to non-negative indices, and meanwhile check if the given array of axes

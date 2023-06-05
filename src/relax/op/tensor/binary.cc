@@ -32,9 +32,17 @@ namespace relax {
 template <typename FType>
 StructInfo InferStructInfoBroadcast(const Call& call, const BlockBuilder& ctx,
                                     FType f_compute_out_dtype) {
-  Array<TensorStructInfo> input_sinfo = GetInputTensorStructInfo(call, ctx);
-  TensorStructInfo x1_sinfo = input_sinfo[0];
-  TensorStructInfo x2_sinfo = input_sinfo[1];
+  Array<TensorStructInfo> input_tensor_sinfos = GetInputTensorStructInfoNoFatal(call, ctx);
+  bool is_tensor_input = !input_tensor_sinfos.empty(); 
+  Array<distributed::DTensorStructInfo> input_dtensor_sinfos = GetInputDTensorStructInfo(call, ctx);
+  TensorStructInfo x1_sinfo, x2_sinfo;
+  if (!is_tensor_input) {
+    x1_sinfo = input_dtensor_sinfos[0]->tensor_sinfo;
+    x2_sinfo = input_dtensor_sinfos[1]->tensor_sinfo;
+  } else {
+    x1_sinfo = input_tensor_sinfos[0];
+    x2_sinfo = input_tensor_sinfos[1];
+  }
 
   // DateType
   DataType output_dtype = f_compute_out_dtype(call, ctx, x1_sinfo, x2_sinfo);
@@ -49,23 +57,30 @@ StructInfo InferStructInfoBroadcast(const Call& call, const BlockBuilder& ctx,
 
   const auto* x1_shape = x1_sinfo->shape.as<ShapeExprNode>();
   const auto* x2_shape = x2_sinfo->shape.as<ShapeExprNode>();
+  TensorStructInfo output_tensor_sinfo;
   // Shapes and ndims
   if (x1_shape && x2_shape) {
     // If all inputs have shapes, directly infer shapes
     Optional<Array<PrimExpr>> output_shape =
         InferBinaryBroadcastShape(call, ctx, x1_shape->values, x2_shape->values);
     if (!output_shape.defined()) {
-      return TensorStructInfo(output_dtype, /*ndim=*/output_ndim);
+      output_tensor_sinfo = TensorStructInfo(output_dtype, /*ndim=*/output_ndim);
     } else {
       ICHECK_EQ(static_cast<int>(output_shape.value().size()), output_ndim);
-      return TensorStructInfo(ShapeExpr(output_shape.value()), output_dtype);
+      output_tensor_sinfo = TensorStructInfo(ShapeExpr(output_shape.value()), output_dtype);
     }
   } else if (x1_sinfo->shape.defined() && x1_sinfo->shape.same_as(x2_sinfo->shape)) {
-    return TensorStructInfo(x1_sinfo->shape.value(), output_dtype);
+    output_tensor_sinfo = TensorStructInfo(x1_sinfo->shape.value(), output_dtype);
   } else {
-    return TensorStructInfo(output_dtype, /*ndim=*/output_ndim);
+    output_tensor_sinfo = TensorStructInfo(output_dtype, /*ndim=*/output_ndim);
   }
-}
+
+  if(is_tensor_input){
+    return output_tensor_sinfo;
+  }
+  distributed::ShardingPlan output_sharding_plan = InferShardingPlan(call, ctx, output_tensor_sinfo, distributed::BuildAxisGraphBinary);
+  return distributed::DTensorStructInfo(output_tensor_sinfo, output_sharding_plan.first, output_sharding_plan.second);
+  }
 
 StructInfo InferStructInfoBroadcastArith(const Call& call, const BlockBuilder& ctx) {
   return InferStructInfoBroadcast(call, ctx, InferBinaryArithOpOutDtype);
