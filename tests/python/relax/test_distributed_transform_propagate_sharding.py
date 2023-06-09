@@ -22,7 +22,7 @@ class TestModule:
     ) -> R.Tensor((128, 128), "float32"):
         lv0 = R.matmul(x, weight1)
         lv1 = R.nn.gelu(lv0)
-        lv2 = R.annotate_sharding(lv1, device_mesh="mesh[0]", placement="R, S[0]" )
+        lv2 = R.annotate_sharding(lv1, device_mesh="mesh[0]", placement="S[1]" )
         lv3 = R.matmul(lv2, weight2)
         return lv3
     

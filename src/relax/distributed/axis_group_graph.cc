@@ -30,11 +30,24 @@ namespace tvm {
 namespace relax {
 namespace distributed {
 
+const TensorStructInfoNode* GetTensorStructInfo(Var var){
+  const auto* tensor_sinfo = GetStructInfoAs<TensorStructInfoNode>(var);
+  if(tensor_sinfo){
+    return tensor_sinfo;
+  }
+  const auto* dtensor_sinfo = GetStructInfoAs<DTensorStructInfoNode>(var);
+  if(dtensor_sinfo){
+    return dtensor_sinfo->tensor_sinfo.get();
+  }
+  LOG(FATAL)<<var->name_hint()<<" must be either Tensor or DTensor";
+  throw;
+}
+
 void UnaryOpHelper(Array<Var> var_list,
                         distributed::AxisGroupGraph* axis_group_graph){
-    int n_dim = GetStructInfoAs<TensorStructInfoNode>(var_list[0])->ndim;
+    int n_dim = GetTensorStructInfo(var_list[0])->ndim;
     for(const auto& var: var_list){
-        ICHECK(GetStructInfoAs<TensorStructInfoNode>(var)->ndim == n_dim);
+        ICHECK(GetTensorStructInfo(var)->ndim == n_dim);
     }
     for (int i = 0; i < n_dim;i++){
         for (int j = 0; j < var_list.size()-1;j++){
@@ -69,8 +82,8 @@ void BuildAxisGraphBinary(const Var& output_var, const Call& call,
     UnaryOpHelper(var_list, axis_group_graph);
     return;
   }
-  const auto* x1_sinfo = GetStructInfoAs<TensorStructInfoNode>(var_list[0]);
-  const auto* x2_sinfo = GetStructInfoAs<TensorStructInfoNode>(var_list[1]);
+  const auto* x1_sinfo = GetTensorStructInfo(var_list[0]);
+  const auto* x2_sinfo = GetTensorStructInfo(var_list[1]);
   int x1_ndim = x1_sinfo->ndim;
   int x2_ndim = x2_sinfo->ndim;
   const auto* x1_shape = x1_sinfo->shape.as<ShapeExprNode>();
@@ -109,7 +122,7 @@ void BuildAxisGraphReduce(const Var& output_var, const Call& call,
     Var input_var = Downcast<Var>(call->args[0]);
     const auto* attrs = call->attrs.as<StatisticalAttrs>();
     ICHECK(attrs);
-    int ndim = GetStructInfoAs<TensorStructInfoNode>(input_var)->ndim;
+    int ndim = GetTensorStructInfo(input_var)->ndim;
 
     if(attrs->axis.defined()){
         std::unordered_set<int> normalized_axes;
@@ -143,8 +156,8 @@ void BuildAxisGraphMatmul(const Var& output_var, const Call& call,
     Var x1 = Downcast<Var>(call->args[0]);
     Var x2 = Downcast<Var>(call->args[1]);
     Var x3 = output_var;
-    const auto* x1_sinfo = GetStructInfoAs<TensorStructInfoNode>(x1);
-    const auto* x2_sinfo = GetStructInfoAs<TensorStructInfoNode>(x2);
+    const auto* x1_sinfo = GetTensorStructInfo(x1);
+    const auto* x2_sinfo = GetTensorStructInfo(x2);
     int x1_ndim = x1_sinfo->ndim;
     int x2_ndim = x2_sinfo->ndim;
     ICHECK(x1_ndim > 0 && x2_ndim > 0);
@@ -202,7 +215,7 @@ void BuildAxisGraphPermuteDims(const Var& output_var, const Call& call,
     Var input_var = Downcast<Var>(call->args[0]);
     const auto* attrs = call->attrs.as<PermuteDimsAttrs>();
     ICHECK(attrs);
-    int ndim = GetStructInfoAs<TensorStructInfoNode>(input_var)->ndim;
+    int ndim = GetTensorStructInfo(input_var)->ndim;
     std::vector<int> normalized_axes;
     if(attrs->axes.defined()){
       for (const Integer& i : attrs->axes.value()) {

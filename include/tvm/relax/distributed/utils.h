@@ -33,12 +33,14 @@ namespace relax {
 namespace distributed {
 
 using ShardingPlan = std::pair<DeviceMesh, Placement>;
-using AxisShardingPlan = std::pair<DeviceMesh, PlacementSpec>;
+
+// device mesh and the device mesh axis that the tensor axis maps to
+using AxisShardingPlan = std::pair<DeviceMesh, int>;
 
 class AxisShardingPlanEqual{
   public:
   bool operator()(const AxisShardingPlan &lhs, const AxisShardingPlan &rhs) const{
-    return StructuralEqual()(lhs.first, rhs.first) && StructuralEqual()(lhs.second, rhs.second);
+    return StructuralEqual()(lhs.first, rhs.first) && lhs.second == rhs.second;
   }
 };
 
@@ -47,7 +49,7 @@ class AxisShardingPlanHash{
   size_t operator()(const AxisShardingPlan &sharding_plan) const{
       size_t seed = 0;
       seed ^= StructuralHash()(sharding_plan.first);
-      seed ^= StructuralHash()(sharding_plan.second) << 1;
+      seed ^= std::hash<int>()(sharding_plan.second) << 1;
       return seed;
   }
 };
