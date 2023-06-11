@@ -32,10 +32,7 @@ namespace tvm {
 namespace relax {
 namespace distributed {
 
-using ShardingPlan = std::pair<DeviceMesh, Placement>;
 
-// device mesh and the device mesh axis that the tensor axis maps to
-using AxisShardingPlan = std::pair<DeviceMesh, int>;
 
 class AxisShardingPlanEqual{
   public:

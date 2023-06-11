@@ -62,58 +62,70 @@ class AxisGroupHash{
   }
 };
 
+using ShardingPlan = std::pair<DeviceMesh, Placement>;
+
+// device mesh and the device mesh axis that the tensor axis maps to
+using AxisShardingPlan = std::pair<DeviceMesh, int>;
+
 //todo: enable cutting edge
 class AxisGroupGraph {
 
+  struct AxisGraphEdge{
+    Axis src;
+    Axis dst;
 
-  public:
-  AxisGroupGraph() = default;
+    bool operator==(const AxisGraphEdge& other) const {
+      return src == other.src && dst == other.dst;
+    }
+  };
+
+  public : AxisGroupGraph() = default;
 
   void JoinAxis(Axis axis1, Axis axis2){
-    LOG(INFO)<<"join ("<<axis1.var->name_hint()<<", "<<axis1.dim<<") and ("<<axis2.var->name_hint()<<", "<<axis2.dim<<")";
-    Axis parent1 = FindParent(axis1);
-    Axis parent2 = FindParent(axis2);
-    if(parent1 == parent2){
-      return;
-    }
-    if (axis2group_.count(parent1)){
-      parent_[parent2] = parent1;
-      if(axis2group_.count(parent2)){
-        axis2group_[parent1].insert(axis2group_[parent2].begin(), axis2group_[parent2].end());
-      } else {
-        axis2group_[parent1].insert(parent2);
-      }
-    } else if(axis2group_.count(parent2)){
-      parent_[parent1] = parent2;
-      axis2group_[parent2].insert(parent1);
-    } else {
-      parent_[parent1] = parent2;
-      axis2group_[parent2] = AxisGroup{parent1, parent2};
+    AddEdge(axis1, axis2);
+    AddEdge(axis2, axis1);
+  }
+
+  void AddSrcShardingPoint(Axis axis, AxisShardingPlan plan){
+    src_axis_sharding_plan_[axis] = plan;
+  }
+
+  void PropagateShardingPlan(){
+    for(const auto& pr: src_axis_sharding_plan_){
+      PropagateShardingPlan(pr.first, pr.second);
     }
   }
 
-  AxisGroup GetAxisGroup(Axis axis){
-    Axis parent = FindParent(axis);
-    if(axis2group_.count(parent)){
-      return axis2group_[parent];
-    } else {
-      return {};
-    }
+  void AddPropagationCutPoint(Axis axis, AxisShardingPlan plan){
+    cutpoint_axis_sharding_plan_[axis] = plan;
   }
-
 
   private:
-  Axis FindParent(Axis axis){
-    if(parent_.count(axis)){
-      axis = parent_[axis] = FindParent(parent_[axis]);
+  void AddEdge(Axis src, Axis dst){
+    if (!graph_.count(src)){
+      graph_[src] = {};
     }
-    return axis;
+    graph_[src].push_back({src, dst});
+  }
+  void PropagateShardingPlan(Axis axis, AxisShardingPlan plan){
+    if(cutpoint_axis_sharding_plan_.count(axis)){
+      return;
+    }
+    if(!axis_sharding_plans_.count(axis)){
+      axis_sharding_plans_[axis] = {};
+    }
+    axis_sharding_plans_[axis].push_back(plan);
+    for(auto edge : graph_[axis]){
+      PropagateShardingPlan(edge.dst, plan);
+    }
   }
 
-  //union set
-  std::unordered_map<Axis, Axis, AxisHash> parent_;
-  std::unordered_map<Axis, AxisGroup, AxisHash> axis2group_;
 
+  //union set
+  std::unordered_map<Axis, std::vector<AxisGraphEdge>, AxisHash> graph_;
+  std::unordered_map<Axis, AxisShardingPlan, AxisHash> src_axis_sharding_plan_;
+  std::unordered_map<Axis, AxisShardingPlan, AxisHash> cutpoint_axis_sharding_plan_;
+  std::unordered_map<Axis, std::vector<AxisShardingPlan>, AxisHash> axis_sharding_plans_;
   
 };
 
@@ -130,6 +142,8 @@ void BuildAxisGraphReduce(const Var& output_var, const Call& call,
 void BuildAxisGraphMatmul(const Var& output_var, const Call& call,
                            distributed::AxisGroupGraph* axis_group_graph);
 void BuildAxisGraphPermuteDims(const Var& output_var, const Call& call,
+                           distributed::AxisGroupGraph* axis_group_graph);
+void BuildAxisGraphReshape(const Var& output_var, const Call& call,
                            distributed::AxisGroupGraph* axis_group_graph);
 
 }  // namespace distributed
