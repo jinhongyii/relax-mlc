@@ -201,38 +201,29 @@ distributed::ShardingPlan InferShardingPlan(const Call& call, const BlockBuilder
   f_build_graph(output_var, call, &axis_group_graph);
   int n_input_var = call->args.size();
   ICHECK(input_dtensor_sinfos.size() == n_input_var);
-  distributed::AxisGroupToShardingPlanSetMap axis_group_to_sharding_plan_set;
   for (int i = 0; i < n_input_var; i++){
     distributed::DTensorStructInfo dtensor_sinfo = input_dtensor_sinfos[i];
     Var input_var = Downcast<Var>(call->args[i]);
-    int ndim = dtensor_sinfo->tensor_sinfo->ndim;
     for (int j = 0; j < static_cast<int>(device_mesh->shape.size()); j++){
       distributed::PlacementSpec placement_spec = dtensor_sinfo->placement->dim_specs[j];
       if (placement_spec->kind !=
           distributed::PlacementSpecKind::kSharding) {
         continue;
       }
-
-      distributed::AxisGroup axis_group = axis_group_graph.GetAxisGroup({input_var.get(), placement_spec->axis});
-      if(!axis_group_to_sharding_plan_set.count(axis_group)){
-        axis_group_to_sharding_plan_set[axis_group] = {};
-      }
-      axis_group_to_sharding_plan_set[axis_group].insert({dtensor_sinfo->device_mesh, j});
+      axis_group_graph.AddSrcShardingPoint({input_var.get(), placement_spec->axis}, {dtensor_sinfo->device_mesh, j});
     }
   }
-
-  Array<distributed::PlacementSpec> output_placement_specs(std::vector<distributed::PlacementSpec>(device_mesh->shape.size(), distributed::PlacementSpec::Replica()));
+  axis_group_graph.PropagateShardingPlan();
+  Array<distributed::PlacementSpec> output_placement_specs(std::vector<distributed::PlacementSpec>(
+      device_mesh->shape.size(), distributed::PlacementSpec::Replica()));
   for (int i = 0; i < output_tensor_sinfo->ndim; i++){
-    distributed::AxisGroup axis_group = axis_group_graph.GetAxisGroup({output_var.get(), i});
-    if(axis_group_to_sharding_plan_set.count(axis_group)){
-      distributed::AxisShardingPlanSet sharding_plan_set = axis_group_to_sharding_plan_set[axis_group];
-      ICHECK(sharding_plan_set.size() == 1);
-      distributed::AxisShardingPlan sharding_plan = *sharding_plan_set.begin();
+    distributed::AxisShardingPlan sharding_plan;
+    bool has_sharding_plan;
+    std::tie(sharding_plan, has_sharding_plan) = axis_group_graph.GetAxisShardingPlan({output_var.get(), i});
+    if(has_sharding_plan){
       output_placement_specs.Set(sharding_plan.second, distributed::PlacementSpec::Sharding(i));
     }
   } 
-
-
   return {input_dtensor_sinfos[0]->device_mesh, distributed::Placement(output_placement_specs)};
 }
 

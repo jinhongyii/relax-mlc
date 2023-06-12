@@ -50,9 +50,11 @@ void UnaryOpHelper(Array<Var> var_list,
         ICHECK(GetTensorStructInfo(var)->ndim == n_dim);
     }
     for (int i = 0; i < n_dim;i++){
-        for (int j = 0; j < var_list.size()-1;j++){
-        axis_group_graph->JoinAxis({var_list[j].get(), i}, {var_list[j+1].get(), i});
-        }
+      ICHECK(var_list.size() <=2);
+      for (int j = 0; j < var_list.size()-1;j++){
+        axis_group_graph->JoinAxis({var_list[j].get(), i}, {var_list[j + 1].get(), i},
+                                    distributed::AxisGroupGraph::EdgeType::kDescend);
+      }
     }
 }
 
@@ -95,12 +97,12 @@ void BuildAxisGraphBinary(const Var& output_var, const Call& call,
       const PrimExpr& dim1 = x2_shape->values[x2_ndim - i];
       if (analyzer.CanProveEqual(dim0, dim1)) {
         //join batch dim
-        axis_group_graph->JoinAxis({var_list[0].get(), x1_ndim - i}, {var_list[2].get(), std::max(x1_ndim, x2_ndim) - i});
-        axis_group_graph->JoinAxis({var_list[1].get(), x2_ndim - i}, {var_list[2].get(), std::max(x1_ndim, x2_ndim) - i});
+        axis_group_graph->JoinAxis({var_list[0].get(), x1_ndim - i}, {var_list[2].get(), std::max(x1_ndim, x2_ndim) - i}, distributed::AxisGroupGraph::EdgeType::kDescend); 
+        axis_group_graph->JoinAxis({var_list[1].get(), x2_ndim - i}, {var_list[2].get(), std::max(x1_ndim, x2_ndim) - i}, distributed::AxisGroupGraph::EdgeType::kDescend);
       } else if(analyzer.CanProveEqual(dim0, 1)){
-        axis_group_graph->JoinAxis({var_list[1].get(), x2_ndim - i}, {var_list[2].get(), std::max(x1_ndim, x2_ndim) - i});
+        axis_group_graph->JoinAxis({var_list[1].get(), x2_ndim - i}, {var_list[2].get(), std::max(x1_ndim, x2_ndim) - i}, distributed::AxisGroupGraph::EdgeType::kDescend);
       } else if(analyzer.CanProveEqual(dim1, 1)){
-        axis_group_graph->JoinAxis({var_list[0].get(), x1_ndim - i}, {var_list[2].get(), std::max(x1_ndim, x2_ndim) - i});
+        axis_group_graph->JoinAxis({var_list[0].get(), x1_ndim - i}, {var_list[2].get(), std::max(x1_ndim, x2_ndim) - i}, distributed::AxisGroupGraph::EdgeType::kDescend);
       } else {
         LOG(FATAL)<<"Invalid broadcast, dim0: "<< dim0 <<", dim1: "<<dim1;
       }
@@ -110,9 +112,9 @@ void BuildAxisGraphBinary(const Var& output_var, const Call& call,
     ICHECK(GetStructInfoAs<TensorStructInfoNode>(var)->ndim == n_dim);
   }
   for (int i = 0; i < n_dim;i++){
-    for (int j = 0; j < var_list.size()-1;j++){
-      axis_group_graph->JoinAxis({var_list[j].get(), i}, {var_list[j+1].get(), i});
-    }
+    axis_group_graph->JoinAxis({var_list[0].get(), i}, {var_list[2].get(), i}, distributed::AxisGroupGraph::EdgeType::kDescend);
+    axis_group_graph->JoinAxis({var_list[1].get(), i}, {var_list[2].get(), i},
+                               distributed::AxisGroupGraph::EdgeType::kDescend);
   }
 }
 
@@ -137,13 +139,13 @@ void BuildAxisGraphReduce(const Var& output_var, const Call& call,
         if(attrs->keepdims){
             for (int i = 0; i < ndim;i++){
                 if(!normalized_axes.count(i)){
-                    axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), i});
+                    axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), i}, distributed::AxisGroupGraph::EdgeType::kDescend);
                 }
             }
         } else {
             for (int i = 0, j = 0; i < ndim;i++){
                 if(!normalized_axes.count(i)){
-                    axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), j});
+                    axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), j},   distributed::AxisGroupGraph::EdgeType::kDescend);
                     j++;
                 }
             } 
@@ -187,26 +189,26 @@ void BuildAxisGraphMatmul(const Var& output_var, const Call& call,
       const PrimExpr& dim1 = x2_shape_prefix[x2_prefix_ndim - i];
         //join batch dim
       if (analyzer.CanProveEqual(dim0, dim1)) {
-        axis_group_graph->JoinAxis({x1.get(), x1_prefix_ndim - i}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) - i});
-        axis_group_graph->JoinAxis({x2.get(), x2_prefix_ndim - i}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) - i});
+        axis_group_graph->JoinAxis({x1.get(), x1_prefix_ndim - i}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) - i}, distributed::AxisGroupGraph::EdgeType::kDescend);
+        axis_group_graph->JoinAxis({x2.get(), x2_prefix_ndim - i}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) - i}, distributed::AxisGroupGraph::EdgeType::kDescend);
       } else if (analyzer.CanProveEqual(dim0, 1)){
-        axis_group_graph->JoinAxis({x2.get(), x2_prefix_ndim - i}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) - i});
+        axis_group_graph->JoinAxis({x2.get(), x2_prefix_ndim - i}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) - i}, distributed::AxisGroupGraph::EdgeType::kDescend);
       } else if (analyzer.CanProveEqual(dim1, 1)){
-        axis_group_graph->JoinAxis({x1.get(), x1_prefix_ndim - i}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) - i});
+        axis_group_graph->JoinAxis({x1.get(), x1_prefix_ndim - i}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) - i}, distributed::AxisGroupGraph::EdgeType::kDescend);
       } else {
         LOG(FATAL) << "Cannot broadcast " << dim0 << " and " << dim1;
       }
     }
     //join reduction dim
-    axis_group_graph->JoinAxis({x1.get(), x1_sinfo->ndim - 1}, {x2.get(), x2_ndim - 2});
+    axis_group_graph->JoinAxis({x1.get(), x1_sinfo->ndim - 1}, {x2.get(), x2_ndim - 2}, distributed::AxisGroupGraph::EdgeType::kSimbling);
     //join lhs_spatial dim and rhs_spatial dim
     if (!x1_prepended) {
-      axis_group_graph->JoinAxis({x1.get(), x1_ndim - 2}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim)});
+      axis_group_graph->JoinAxis({x1.get(), x1_ndim - 2}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim)}, distributed::AxisGroupGraph::EdgeType::kDescend);
       if(!x2_appended){
-        axis_group_graph->JoinAxis({x2.get(), x2_ndim - 1}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) + 1});
+        axis_group_graph->JoinAxis({x2.get(), x2_ndim - 1}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim) + 1}, distributed::AxisGroupGraph::EdgeType::kDescend);
       }
     } else if(!x2_appended){
-      axis_group_graph->JoinAxis({x2.get(), x2_ndim - 1}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim)});
+      axis_group_graph->JoinAxis({x2.get(), x2_ndim - 1}, {x3.get(), std::max(x1_prefix_ndim, x2_prefix_ndim)}, distributed::AxisGroupGraph::EdgeType::kDescend);
     }
 }
 
@@ -231,7 +233,7 @@ void BuildAxisGraphPermuteDims(const Var& output_var, const Call& call,
       std::iota(normalized_axes.rbegin(), normalized_axes.rend(), 0);
     }
     for(int i = 0; i < ndim; i++){
-      axis_group_graph->JoinAxis({input_var.get(), normalized_axes[i]}, {output_var.get(), i});
+      axis_group_graph->JoinAxis({input_var.get(), normalized_axes[i]}, {output_var.get(), i}, distributed::AxisGroupGraph::EdgeType::kDescend);
     }
 }
 

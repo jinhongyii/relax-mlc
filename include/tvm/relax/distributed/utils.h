@@ -34,22 +34,7 @@ namespace distributed {
 
 
 
-class AxisShardingPlanEqual{
-  public:
-  bool operator()(const AxisShardingPlan &lhs, const AxisShardingPlan &rhs) const{
-    return StructuralEqual()(lhs.first, rhs.first) && lhs.second == rhs.second;
-  }
-};
 
-class AxisShardingPlanHash{
-  public:
-  size_t operator()(const AxisShardingPlan &sharding_plan) const{
-      size_t seed = 0;
-      seed ^= StructuralHash()(sharding_plan.first);
-      seed ^= std::hash<int>()(sharding_plan.second) << 1;
-      return seed;
-  }
-};
 using AxisShardingPlanSet = std::unordered_set<AxisShardingPlan, AxisShardingPlanHash, AxisShardingPlanEqual>;
 using AxisGroupToShardingPlanSetMap = std::unordered_map<AxisGroup, AxisShardingPlanSet, AxisGroupHash>;
 

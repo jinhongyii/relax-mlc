@@ -101,7 +101,7 @@ void CollectAxisGraphForDeviceMesh(const VarBindingNode* binding, const CallNode
   }
   var_list.push_back(binding->var);
   for (int i = 0; i < var_list.size() - 1; i++) {
-    axis_group_graph->JoinAxis({var_list[i].get(),-1}, {var_list[i + 1].get(), -1});
+    axis_group_graph->JoinAxis({var_list[i].get(),-1}, {var_list[i + 1].get(), -1}, distributed::AxisGroupGraph::EdgeType::kSimbling);
   }
 }
 
@@ -133,13 +133,13 @@ class AxisGroupGraphBuilder: public ExprVisitor{
 //todo: wrong understanding on placement definition. need to modify the logic
 class ShardingAnnotationCollector : public ExprVisitor {
   public: 
-  static void CollectShardingAnnotation(AxisGroupGraph* axis_group_graph, AxisGroupToShardingPlanSetMap* axis_group_to_sharding_plan, const Function& func){
-    ShardingAnnotationCollector collector(axis_group_graph, axis_group_to_sharding_plan);
+  static void CollectShardingAnnotation(AxisGroupGraph* axis_group_graph, const Function& func){
+    ShardingAnnotationCollector collector(axis_group_graph);
     collector.VisitExpr(func);
   }
 
   private:
-  ShardingAnnotationCollector(AxisGroupGraph* axis_group_graph, AxisGroupToShardingPlanSetMap* axis_group_to_distribution_plan): axis_group_graph_(axis_group_graph), axis_group_to_sharding_plan_set_(axis_group_to_distribution_plan){}
+  ShardingAnnotationCollector(AxisGroupGraph* axis_group_graph): axis_group_graph_(axis_group_graph){}
   void VisitBinding_(const VarBindingNode* binding, const CallNode* val){
     static const Op& annotate_sharding_op = Op::Get("relax.distributed.annotate_sharding");
     if(val->op.same_as(annotate_sharding_op)){
@@ -149,75 +149,69 @@ class ShardingAnnotationCollector : public ExprVisitor {
       for (int i = 0;i < attrs->placement->dim_specs.size(); i++) {
         const PlacementSpec& placement_spec = attrs->placement->dim_specs[i];
         if (placement_spec->kind == PlacementSpecKind::kSharding) {
-          AxisGroup axis_group = axis_group_graph_->GetAxisGroup({binding->var.get(), placement_spec->axis});
+          axis_group_graph_->AddSrcShardingPoint({binding->var.get(), placement_spec->axis}, {attrs->device_mesh, i});
           LOG(INFO)<<"add sharding plan: "<<i<<", axis group:"<<binding->var->name_hint()<<", "<<placement_spec->axis;
-          AddShardingPlan(axis_group, {attrs->device_mesh, i});
         }
       }
-
-      //FIXME(hongyi): should represent src nodes in axis group graph, and cutting graph will reflect on the device mesh choice of unassigned tensors
-      AxisGroup device_mesh_axis_group = axis_group_graph_->GetAxisGroup({binding->var.get(), -1});
-      AddShardingPlan(device_mesh_axis_group, {attrs->device_mesh, -1});
+      axis_group_graph_->AddSrcShardingPoint({binding->var.get(), -1}, {attrs->device_mesh, -1});
     }
     ExprVisitor::VisitBinding_(binding, val);
   }
 
-  void AddShardingPlan(const AxisGroup& axis_group, const AxisShardingPlan& sharding_plan){
-    if(!axis_group_to_sharding_plan_set_->count(axis_group)){
-      (*axis_group_to_sharding_plan_set_)[axis_group] = {};
-    }
-    (*axis_group_to_sharding_plan_set_)[axis_group].insert(sharding_plan);
-
-  }
-
   AxisGroupGraph* axis_group_graph_;
-  AxisGroupToShardingPlanSetMap* axis_group_to_sharding_plan_set_;
 };
 
 class ShardingConflictHandler: public ExprVisitor{
 
   public:
-  static void HandleShardingConflict(AxisGroupGraph* axis_group_graph, AxisGroupToShardingPlanSetMap* axis_group_to_sharding_plan, Function function){
-    ShardingConflictHandler handler(axis_group_graph, axis_group_to_sharding_plan);
+  static void HandleShardingConflict(AxisGroupGraph* axis_group_graph, Function function){
+    axis_group_graph->PropagateShardingPlan();
+    ShardingConflictHandler handler(axis_group_graph);
     handler.VisitExpr(function);
     for(const Var& var: function->params){
       if(GetStructInfoAs<TensorStructInfoNode>(var)){
         handler.CheckTensorShardingCompatible(var);
       }
     }
+    axis_group_graph->PropagateShardingPlan();
   }
 
   private:
-  ShardingConflictHandler(AxisGroupGraph* axis_group_graph, AxisGroupToShardingPlanSetMap* axis_group_to_sharding_plan): axis_group_graph_(axis_group_graph), axis_group_to_sharding_plan_set_(axis_group_to_sharding_plan){}
+  ShardingConflictHandler(AxisGroupGraph* axis_group_graph): axis_group_graph_(axis_group_graph){}
 
   void CheckTensorShardingCompatible(Var var){
     const auto* sinfo = GetStructInfoAs<TensorStructInfoNode>(var);
     ICHECK(sinfo);
+    const auto* shape = sinfo->shape.as<ShapeExprNode>();
+    ICHECK(shape);
     int ndim = sinfo->ndim;
     std::unordered_set<int> sharded_mesh_dim;
     Optional<DeviceMesh> device_mesh;
     for (int i = -1; i < ndim; i++) {
-      AxisGroup axis_group = axis_group_graph_->GetAxisGroup({var.get(), i});
-      if(axis_group_to_sharding_plan_set_->count(axis_group)){
-        AxisShardingPlanSet sharding_plan_set = axis_group_to_sharding_plan_set_->at(axis_group);
-        for(const auto& sharding_plan: sharding_plan_set){
-          LOG(INFO) << sharding_plan.first << sharding_plan.second;
-        }
-        if(sharding_plan_set.size() > 1){
-          ICHECK(false) << "Sharding conflict detected for tensor " << var->name_hint() << ": Multiple sharding plans for tensor axis " << i << ". Conflict Handling logic will be added in the future.";
-        }
-        AxisShardingPlan sharding_plan = *sharding_plan_set.begin();
-        if(i>=0){
-          int sharding_dim = sharding_plan.second;
-          ICHECK(sharded_mesh_dim.count(sharding_dim) == 0) << "Sharding conflict detected for tensor " << var->name_hint() << ": Replicate sharding device mesh axis " << sharding_dim
-                                                                    << ". Conflict Handling logic will be added in the future.";
-          sharded_mesh_dim.insert(sharding_dim);
-        }
-        if(device_mesh.defined()){
-          ICHECK(StructuralEqual()(device_mesh.value(), sharding_plan.first)) << "Sharding conflict detected for tensor " << var->name_hint() << ": Device Mesh mismatch"
-                                                                                              << ". Conflict Handling logic will be added in the future.";
-        } else {
-          device_mesh = sharding_plan.first;
+      AxisShardingPlan sharding_plan;
+      int has_sharding_plan;
+      std::tie(sharding_plan, has_sharding_plan) = axis_group_graph_->GetAxisShardingPlan({var.get(), i});
+      if (!has_sharding_plan){
+        continue;
+      }
+
+      if(device_mesh.defined()){
+        ICHECK(StructuralEqual()(device_mesh.value(), sharding_plan.first)) << "Sharding conflict detected for tensor " << var->name_hint() << ": Device Mesh mismatch"
+                                                                                            << ". Conflict Handling logic will be added in the future.";
+      } else {
+        device_mesh = sharding_plan.first;
+      }
+      if (i >= 0) {
+        int sharding_dim = sharding_plan.second;
+        ICHECK(sharded_mesh_dim.count(sharding_dim) == 0)
+            << "Sharding conflict detected for tensor " << var->name_hint()
+            << ": Replicate sharding device mesh axis " << sharding_dim
+            << ". Conflict Handling logic will be added in the future.";
+        sharded_mesh_dim.insert(sharding_dim);
+        if(const auto* val = shape->values[i].as<IntImmNode>()){
+          if (val->value < device_mesh.value()->shape[sharding_plan.second]){
+            axis_group_graph_->AddPropagationCutPoint({var.get(), i}, sharding_plan);
+          } 
         }
       }
     }
@@ -231,7 +225,6 @@ class ShardingConflictHandler: public ExprVisitor{
   }
   
   AxisGroupGraph* axis_group_graph_;
-  AxisGroupToShardingPlanSetMap* axis_group_to_sharding_plan_set_;
 };
 
 class DistributedIRBuilder: public ExprMutator{
@@ -256,14 +249,14 @@ class DistributedIRBuilder: public ExprMutator{
   Var RewriteInputTensor(Var param){
     const auto* sinfo = GetStructInfoAs<TensorStructInfoNode>(param);
     int ndim = sinfo->ndim;
-    AxisGroup device_mesh_axis_group = axis_group_graph_.GetAxisGroup({param.get(), -1});
-    DeviceMesh device_mesh = axis_group_to_sharding_plan_set_.at(device_mesh_axis_group).begin()->first;
+    DeviceMesh device_mesh = std::get<0>(axis_group_graph_.GetAxisShardingPlan({param.get(), -1})).first;
     Array<PlacementSpec> placement_specs(std::vector<PlacementSpec>(device_mesh->shape.size(), PlacementSpec::Replica()));
     for (int i = 0;i<ndim;i++){
-      AxisGroup axis_group = axis_group_graph_.GetAxisGroup({param.get(), i});
-      visited_axis_group_.insert(axis_group);
-      if(axis_group_to_sharding_plan_set_.count(axis_group)){
-        int sharding_dim = axis_group_to_sharding_plan_set_.at(axis_group).begin()->second;
+      AxisShardingPlan sharding_plan;
+      bool has_sharding_plan;
+      std::tie(sharding_plan, has_sharding_plan) = axis_group_graph_.GetAxisShardingPlan({param.get(), i});
+      if(has_sharding_plan){
+        int sharding_dim = sharding_plan.second;
         placement_specs.Set(sharding_dim, PlacementSpec::Sharding(i));
       }
     } 
@@ -276,10 +269,10 @@ class DistributedIRBuilder: public ExprMutator{
     AxisGroupGraphBuilder::BuildAxisGroupGraph(&axis_group_graph_, func);
     LOG(INFO) << "step 1 complete";
     // Step 2. Collect Sharding Annotation
-    ShardingAnnotationCollector::CollectShardingAnnotation(&axis_group_graph_, &axis_group_to_sharding_plan_set_, func);
+    ShardingAnnotationCollector::CollectShardingAnnotation(&axis_group_graph_, func);
     LOG(INFO)<<"step 2 complete";
     // Step 3. Handle Sharding Conflict
-    ShardingConflictHandler::HandleShardingConflict(&axis_group_graph_, &axis_group_to_sharding_plan_set_, func);
+    ShardingConflictHandler::HandleShardingConflict(&axis_group_graph_, func);
     LOG(INFO)<<"step 3 complete";
     // Step 4. Rewrite Function
     Array<Var> new_params;
@@ -301,36 +294,48 @@ class DistributedIRBuilder: public ExprMutator{
 
   void VisitBinding_(const VarBindingNode* binding, const CallNode* val){
     LOG(INFO) << "visit " << binding->var;
-    static const Op& annotate_sharding_op = Op::Get("relax.distributed.annotate_sharding");
     Call new_call = Downcast<Call>(this->VisitExpr(binding->value));
-    if(val->op.same_as(annotate_sharding_op)){
-      ReEmitBinding(binding, new_call->args[0]);
-      return;
-    }
+
     const auto* sinfo = GetStructInfoAs<TensorStructInfoNode>(binding->var);
     int ndim = sinfo->ndim;
     bool insert_redistribute = false;
-    AxisGroup device_mesh_axis_group = axis_group_graph_.GetAxisGroup({binding->var.get(), -1});
-    DeviceMesh device_mesh = axis_group_to_sharding_plan_set_.at(device_mesh_axis_group).begin()->first;
+    DeviceMesh device_mesh = std::get<0>(axis_group_graph_.GetAxisShardingPlan({binding->var.get(), -1})).first;
     Array<PlacementSpec> placement_specs(std::vector<PlacementSpec>(device_mesh->shape.size(), PlacementSpec::Replica()));
-    for (int i = 0; i < ndim;i++){
-      AxisGroup axis_group = axis_group_graph_.GetAxisGroup({binding->var.get(), i});
-      if (axis_group_to_sharding_plan_set_.count(axis_group)) {
-        if(!visited_axis_group_.count(axis_group)){
-          insert_redistribute = true;
-          visited_axis_group_.insert(axis_group);
-        } 
-        AxisShardingPlan sharding_plan = *axis_group_to_sharding_plan_set_.at(axis_group).begin();
+
+    Expr new_value = builder_->Normalize(new_call);
+    const auto* inferred_dtensor_sinfo = GetStructInfoAs<DTensorStructInfoNode>(new_value);
+    ICHECK(inferred_dtensor_sinfo);
+
+    for (int i = 0; i < ndim; i++) {
+      AxisShardingPlan sharding_plan;
+      bool has_sharding_plan;
+      std::tie(sharding_plan, has_sharding_plan) =
+          axis_group_graph_.GetAxisShardingPlan({binding->var.get(), i});
+      if (has_sharding_plan) {
         placement_specs.Set(sharding_plan.second, PlacementSpec::Sharding(i));
       }
-    } 
-    LOG(INFO) << "insert redistribute:" << insert_redistribute;
-    if(insert_redistribute){
-      Expr new_value= redistribute(new_call, device_mesh, Placement(placement_specs));
-      new_value = builder_->Normalize(new_value);
-      ReEmitBinding(binding, new_value);
+    }
+    if (!StructuralEqual()(placement_specs, inferred_dtensor_sinfo->placement->dim_specs)) {
+      insert_redistribute = true;
+    }
+
+    static const Op& annotate_sharding_op = Op::Get("relax.distributed.annotate_sharding");
+    if (val->op.same_as(annotate_sharding_op)) {      
+      if (insert_redistribute) {
+        Expr redistribute_call = redistribute(new_call->args[0], device_mesh, Placement(placement_specs));
+        redistribute_call = builder_->Normalize(redistribute_call);
+        ReEmitBinding(binding, redistribute_call);
+      } else {
+        ReEmitBinding(binding, new_call->args[0]);
+      }
     } else {
-      ReEmitBinding(binding, new_call);
+      if (insert_redistribute) {
+        Expr redistribute_call = redistribute(new_call, device_mesh, Placement(placement_specs));
+        redistribute_call = builder_->Normalize(redistribute_call);
+        ReEmitBinding(binding, redistribute_call);
+      } else {
+        ReEmitBinding(binding, new_call);
+      }
     }
   }
 
@@ -344,8 +349,6 @@ class DistributedIRBuilder: public ExprMutator{
 
   Map<Var, Var> input_tensor_remap_;
   AxisGroupGraph axis_group_graph_;
-  AxisGroupToShardingPlanSetMap axis_group_to_sharding_plan_set_;
-  std::unordered_set<AxisGroup, AxisGroupHash> visited_axis_group_;
 };
 namespace transform {
 
