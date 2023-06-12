@@ -724,9 +724,17 @@ StructInfo InferStructInfoReshape(const Call& call, const BlockBuilder& ctx) {
   if (call->args.size() != 2) {
     ctx->ReportFatal(Diagnostic::Error(call) << "Reshape op should take 2 arguments");
   }
-  const auto* data_sinfo = GetStructInfoAs<TensorStructInfoNode>(call->args[0]);
+  Array<TensorStructInfo> input_tensor_sinfos = GetInputTensorStructInfoNoFatal(call, ctx);
+  bool is_tensor_input = !input_tensor_sinfos.empty(); 
+  Array<distributed::DTensorStructInfo> input_dtensor_sinfos = GetInputDTensorStructInfo(call, ctx);
+  TensorStructInfo data_sinfo;
+  if(is_tensor_input){
+    data_sinfo = input_tensor_sinfos[0];
+  } else {
+    data_sinfo = input_dtensor_sinfos[0]->tensor_sinfo;
+  }
   const auto* new_shape_sinfo = GetStructInfoAs<ShapeStructInfoNode>(call->args[1]);
-  if (data_sinfo == nullptr) {
+  if (!data_sinfo.defined()) {
     ctx->ReportFatal(Diagnostic::Error(call)
                      << "Reshape requires the input data to be Tensor. However, the given one is "
                      << call->args[0]->struct_info_->GetTypeKey());
@@ -758,11 +766,19 @@ StructInfo InferStructInfoReshape(const Call& call, const BlockBuilder& ctx) {
     }
   }
   Expr target_shape = call->args[1];
+  TensorStructInfo output_tensor_sinfo;
   // If shape values are defined, use them
   if (target_shape->IsInstance<VarNode>() && new_shape_sinfo->values.defined()) {
-    return TensorStructInfo(ShapeExpr(new_shape_sinfo->values.value()), data_sinfo->dtype);
+    output_tensor_sinfo = TensorStructInfo(ShapeExpr(new_shape_sinfo->values.value()), data_sinfo->dtype);
+  } else {
+    output_tensor_sinfo = TensorStructInfo(target_shape, data_sinfo->dtype);
   }
-  return TensorStructInfo(target_shape, data_sinfo->dtype);
+  if(is_tensor_input){
+    return output_tensor_sinfo;
+  }
+  distributed::ShardingPlan output_sharding_plan = InferShardingPlan(call, ctx, output_tensor_sinfo, distributed::BuildAxisGraphReshape);
+  return distributed::DTensorStructInfo(output_tensor_sinfo, output_sharding_plan.first, output_sharding_plan.second);
+
 }
 
 TVM_REGISTER_OP("relax.reshape")

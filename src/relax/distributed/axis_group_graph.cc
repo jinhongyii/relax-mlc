@@ -25,6 +25,7 @@
 #include <tvm/relax/attrs/linear_algebra.h>
 #include <tvm/relax/attrs/statistical.h>
 #include <tvm/relax/attrs/distributed.h>
+#include <tvm/relax/attrs/nn.h>
 
 namespace tvm {
 namespace relax {
@@ -122,35 +123,46 @@ void BuildAxisGraphReduce(const Var& output_var, const Call& call,
                            distributed::AxisGroupGraph* axis_group_graph){
     ICHECK(call->args[0]->IsInstance<VarNode>());
     Var input_var = Downcast<Var>(call->args[0]);
-    const auto* attrs = call->attrs.as<StatisticalAttrs>();
-    ICHECK(attrs);
+    Array<Integer> axes;
+    bool keepdims;
+    if (const auto* attrs = call->attrs.as<StatisticalAttrs>()) {
+      if (attrs->axis.defined()) {
+        axes = attrs->axis.value();
+      }
+      keepdims = attrs->keepdims;
+    } else if (const auto* attrs = call->attrs.as<SoftmaxAttrs>()){
+      axes = {attrs->axis};
+      keepdims = false;
+    } else {
+      LOG(FATAL) << "Unsupported reduce op: " << call->op;
+    }
+
     int ndim = GetTensorStructInfo(input_var)->ndim;
 
-    if(attrs->axis.defined()){
-        std::unordered_set<int> normalized_axes;
-        for (const Integer& i : attrs->axis.value()) {
-            int val = i->value;
-            ICHECK(val < ndim && val >= -ndim);
-            if (val < 0) {
-                val = ndim + val;
-            }
-            normalized_axes.insert(val);
+    std::unordered_set<int> normalized_axes;
+    for (const Integer& i : axes) {
+        int val = i->value;
+        ICHECK(val < ndim && val >= -ndim);
+        if (val < 0) {
+            val = ndim + val;
         }
-        if(attrs->keepdims){
-            for (int i = 0; i < ndim;i++){
-                if(!normalized_axes.count(i)){
-                    axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), i}, distributed::AxisGroupGraph::EdgeType::kDescend);
-                }
-            }
-        } else {
-            for (int i = 0, j = 0; i < ndim;i++){
-                if(!normalized_axes.count(i)){
-                    axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), j},   distributed::AxisGroupGraph::EdgeType::kDescend);
-                    j++;
-                }
-            } 
-        }
+        normalized_axes.insert(val);
     }
+    if(keepdims){
+        for (int i = 0; i < ndim;i++){
+            if(!normalized_axes.count(i)){
+                axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), i}, distributed::AxisGroupGraph::EdgeType::kDescend);
+            }
+        }
+    } else {
+        for (int i = 0, j = 0; i < ndim;i++){
+            if(!normalized_axes.count(i)){
+                axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), j},   distributed::AxisGroupGraph::EdgeType::kDescend);
+                j++;
+            }
+        } 
+    }
+    
 }
 
 void BuildAxisGraphMatmul(const Var& output_var, const Call& call,
@@ -236,7 +248,37 @@ void BuildAxisGraphPermuteDims(const Var& output_var, const Call& call,
       axis_group_graph->JoinAxis({input_var.get(), normalized_axes[i]}, {output_var.get(), i}, distributed::AxisGroupGraph::EdgeType::kDescend);
     }
 }
-
+void BuildAxisGraphReshape(const Var& output_var, const Call& call,
+                           distributed::AxisGroupGraph* axis_group_graph){
+  Var input_var = Downcast<Var>(call->args[0]);
+  const auto* tensor_sinfo = GetTensorStructInfo(input_var);
+  const auto* new_shape_sinfo = GetStructInfoAs<ShapeStructInfoNode>(call->args[1]);
+  const auto* old_shape_sinfo = GetStructInfoAs<ShapeStructInfoNode>(tensor_sinfo->shape.value());
+  ICHECK_NOTNULL(old_shape_sinfo);
+  Array<PrimExpr> old_shape_values = old_shape_sinfo->values.value();
+  Array<PrimExpr> new_shape_values = new_shape_sinfo->values.value();
+  int i = old_shape_values.size();
+  int j = new_shape_values.size();
+  PrimExpr old_shape_product = 1, new_shape_product = 1;
+  arith::Analyzer analyzer_;
+  while(i >= 0 && j >= 0){
+    if(analyzer_.CanProve(new_shape_product > old_shape_product)){
+        i--;
+        old_shape_product *= old_shape_values[i];
+    } else if (analyzer_.CanProve(new_shape_product < old_shape_product)){
+        j--;
+        new_shape_product *= new_shape_values[j];
+    } else {
+        if(i != old_shape_values.size()){
+            axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), j}, distributed::AxisGroupGraph::EdgeType::kDescend);
+        }
+        i--;
+        j--;
+        old_shape_product *= old_shape_values[i];
+        new_shape_product *= new_shape_values[j];
+    }
+  }
+}
 } // namespace distributed
 }  // namespace relax
 }  // namespace tvm

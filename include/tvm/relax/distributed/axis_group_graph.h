@@ -135,7 +135,8 @@ class AxisGroupGraph {
   void PropagateShardingPlan(){
     axis_sharding_plans_priority_.clear();
     for(const auto& pr: src_axis_sharding_plan_){
-      PropagateShardingPlan(pr.first, pr.second, GetEdgePriority(EdgeType::kDescend));
+      std::unordered_set<Axis, AxisHash> visited;
+      PropagateShardingPlan(pr.first, pr.second, GetEdgePriority(EdgeType::kDescend), &visited);
     }
     ChooseAxisShardingPlan();
   }
@@ -160,17 +161,18 @@ class AxisGroupGraph {
     graph_[src].push_back({src, dst, type});
   }
 
-  void PropagateShardingPlan(Axis axis, AxisShardingPlan plan, int priority){
-    if (cutpoint_axis_sharding_plan_.count(axis) &&
-        (src_axis_sharding_plan_.count(axis) && !AxisShardingPlanEqual()(src_axis_sharding_plan_[axis], plan))) {
+  void PropagateShardingPlan(Axis axis, AxisShardingPlan plan, int priority, std::unordered_set<Axis, AxisHash>* visited){
+    if (cutpoint_axis_sharding_plan_.count(axis) ||
+        (src_axis_sharding_plan_.count(axis) && !AxisShardingPlanEqual()(src_axis_sharding_plan_[axis], plan)) || visited->count(axis)) {
       return;
     }
+    visited->insert(axis);
     if (!axis_sharding_plans_priority_.count(axis)) {
       axis_sharding_plans_priority_[axis] = {};
     }
     axis_sharding_plans_priority_[axis][plan] = priority;
     for(auto edge : graph_[axis]){
-      PropagateShardingPlan(edge.dst, plan, std::min(priority, GetEdgePriority(edge.type)));
+      PropagateShardingPlan(edge.dst, plan, std::min(priority, GetEdgePriority(edge.type)), visited);
     }
   }
 
