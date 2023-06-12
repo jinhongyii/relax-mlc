@@ -219,6 +219,9 @@ void BuildAxisGraphPermuteDims(const Var& output_var, const Call& call,
                            distributed::AxisGroupGraph* axis_group_graph);
 void BuildAxisGraphReshape(const Var& output_var, const Call& call,
                            distributed::AxisGroupGraph* axis_group_graph);
+//assume output must be a tensor/dtensor (not tuple)
+void BuildAxisGraphCallTIR(const Var& output_var, const Call& call, const tir::PrimFunc& func,
+                           distributed::AxisGroupGraph* axis_group_graph);
 
 }  // namespace distributed
 }  // namespace relax
