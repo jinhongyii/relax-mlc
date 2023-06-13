@@ -20,6 +20,7 @@
 #ifndef TVM_RELAX_DISTRIBUTED_AXIS_GROUP_GRAPH_H_
 #define TVM_RELAX_DISTRIBUTED_AXIS_GROUP_GRAPH_H_
 
+#include <tvm/tir/function.h>
 #include <tvm/relax/expr.h>
 #include <tvm/relax/distributed/struct_info.h>
 
