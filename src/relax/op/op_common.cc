@@ -24,6 +24,17 @@
 namespace tvm {
 namespace relax {
 
+Array<Expr> GetCallArgs(const Call& call){
+  static const Op& call_tir_op = Op::Get("relax.call_tir");
+  Array<Expr> args;
+  if (call->op.same_as(call_tir_op)) {
+    args = Downcast<Tuple>(call->args[1])->fields;
+  } else{
+    args = call->args;
+  }
+  return args;
+}
+
 Array<TensorStructInfo> GetInputTensorStructInfo(const Call& call, const BlockBuilder& ctx) {
   Op op = Downcast<Op>(call->op);
   int n_input = op->arguments.size();
@@ -67,19 +78,14 @@ Array<TensorStructInfo> GetInputTensorStructInfoNoFatal(const Call& call, const 
 
 Array<distributed::DTensorStructInfo> GetInputDTensorStructInfo(const Call& call, const BlockBuilder& ctx) {
   Op op = Downcast<Op>(call->op);
-  int n_input = op->arguments.size();
-  if (static_cast<int>(call->args.size()) != n_input) {
-    ctx->ReportFatal(Diagnostic::Error(call)
-                     << op << " op should have " << n_input << " arguments");
-  }
+  Array<Expr> args = GetCallArgs(call);
   Array<distributed::DTensorStructInfo> input_tensor_sinfo;
-  input_tensor_sinfo.reserve(n_input);
-  for (int i = 0; i < n_input; ++i) {
-    const auto* sinfo = GetStructInfoAs<distributed::DTensorStructInfoNode>(call->args[i]);
-    if (sinfo == nullptr) {
-      return {};
+  input_tensor_sinfo.reserve(args.size());
+  for (const Expr& arg: args) {
+    const auto* sinfo = GetStructInfoAs<distributed::DTensorStructInfoNode>(arg);
+    if (sinfo != nullptr) {
+      input_tensor_sinfo.push_back(GetRef<distributed::DTensorStructInfo>(sinfo));
     }
-    input_tensor_sinfo.push_back(GetRef<distributed::DTensorStructInfo>(sinfo));
   }
   return input_tensor_sinfo;
 }
@@ -199,11 +205,11 @@ distributed::ShardingPlan InferShardingPlan(const Call& call, const BlockBuilder
   Var output_var("output", output_tensor_sinfo);
   distributed::AxisGroupGraph axis_group_graph;
   f_build_graph(output_var, call, &axis_group_graph);
-  int n_input_var = call->args.size();
-  ICHECK(input_dtensor_sinfos.size() == n_input_var);
+  Array<Expr> args = GetCallArgs(call);
+  int n_input_var = input_dtensor_sinfos.size();
   for (int i = 0; i < n_input_var; i++){
     distributed::DTensorStructInfo dtensor_sinfo = input_dtensor_sinfos[i];
-    Var input_var = Downcast<Var>(call->args[i]);
+    Var input_var = Downcast<Var>(args[i]);
     for (int j = 0; j < static_cast<int>(device_mesh->shape.size()); j++){
       distributed::PlacementSpec placement_spec = dtensor_sinfo->placement->dim_specs[j];
       if (placement_spec->kind !=

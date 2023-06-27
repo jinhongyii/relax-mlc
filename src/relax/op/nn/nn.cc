@@ -50,19 +50,38 @@ Expr softmax(Expr data, int axis) {
 TVM_REGISTER_GLOBAL("relax.op.nn.softmax").set_body_typed(softmax);
 
 StructInfo InferStructInfoSoftmax(const Call& call, const BlockBuilder& ctx) {
-  TensorStructInfo data_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
-  if (data_sinfo->IsUnknownNdim()) {
-    return data_sinfo;
+
+  Array<TensorStructInfo> input_tensor_sinfos = GetInputTensorStructInfoNoFatal(call, ctx);
+  TensorStructInfo input_tensor_sinfo;
+  distributed::DTensorStructInfo input_dtensor_sinfo;
+  bool is_tensor_input = !input_tensor_sinfos.empty();
+  if (!is_tensor_input) {
+    Array<distributed::DTensorStructInfo> input_dtensor_sinfos = GetInputDTensorStructInfo(call, ctx);
+    ICHECK(!input_dtensor_sinfos.empty());
+    input_dtensor_sinfo = input_dtensor_sinfos[0];
+    input_tensor_sinfo = input_dtensor_sinfo->tensor_sinfo;
+  } else {
+    input_tensor_sinfo = input_tensor_sinfos[0];
   }
-  if (!data_sinfo->IsUnknownDtype() && !data_sinfo->dtype.is_float()) {
+  
+  if (input_tensor_sinfo->IsUnknownNdim()) {
+    ICHECK(is_tensor_input);
+    return input_tensor_sinfo;
+  }
+  if (!input_tensor_sinfo->IsUnknownDtype() && !input_tensor_sinfo->dtype.is_float()) {
     ctx->ReportFatal(Diagnostic::Error(call) << "Softmax requires the input tensor to have float "
                                                 "dtype. However, the given input dtype is "
-                                             << data_sinfo->dtype);
+                                             << input_tensor_sinfo->dtype);
   }
   const auto* attrs = call->attrs.as<SoftmaxAttrs>();
-  NormalizeAxis(call, ctx, data_sinfo->ndim, attrs->axis);
+  NormalizeAxis(call, ctx, input_tensor_sinfo->ndim, attrs->axis);
 
-  return data_sinfo;
+  if(is_tensor_input){
+    return input_tensor_sinfo;
+  } else{
+    distributed::ShardingPlan output_sharding_plan = InferShardingPlan(call, ctx, input_tensor_sinfo, distributed::BuildAxisGraphReduce);
+    return distributed::DTensorStructInfo(input_tensor_sinfo, output_sharding_plan.first, output_sharding_plan.second);
+  }
 }
 
 InferLayoutOutput InferLayoutSoftmax(const Call& call,

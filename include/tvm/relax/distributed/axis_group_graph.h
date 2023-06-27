@@ -99,6 +99,8 @@ class AxisGroupGraph {
       case EdgeType::kSimbling:
         return EdgeType::kSimbling;
     }
+    LOG(FATAL)<< "Unreachable code";
+    throw;
   }
 
   int GetEdgePriority(EdgeType type){
@@ -110,6 +112,8 @@ class AxisGroupGraph {
       case EdgeType::kSimbling:
         return 1;
     }
+    LOG(FATAL)<< "Unreachable code";
+    throw;
   }
 
   struct AxisGraphEdge{
@@ -156,7 +160,8 @@ class AxisGroupGraph {
 
  private:
   void AddEdge(Axis src, Axis dst, EdgeType type){
-    if (!graph_.count(src)){
+    LOG(INFO) << "Add edge (" << src.var->name_hint() << ", "<< src.dim << ") -> (" << dst.var->name_hint() << ", " << dst.dim << ") type: " << static_cast<int>(type);
+    if (!graph_.count(src)) {
       graph_[src] = {};
     }
     graph_[src].push_back({src, dst, type});

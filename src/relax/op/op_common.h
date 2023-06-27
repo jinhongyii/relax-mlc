@@ -42,6 +42,8 @@
 namespace tvm {
 namespace relax {
 
+Array<Expr> GetCallArgs(const Call& call);
+
 /************ Op input struct info getter ************/
 
 /*!
@@ -129,7 +131,7 @@ inline StructInfo InferStructInfoUnary(const Call& call, const BlockBuilder& ctx
   TensorStructInfo input_tensor_sinfo;
   distributed::DTensorStructInfo input_dtensor_sinfo;
   bool is_tensor_input = !input_tensor_sinfos.empty();
-  if (input_tensor_sinfos.empty()) {
+  if (!is_tensor_input) {
     Array<distributed::DTensorStructInfo> input_dtensor_sinfos = GetInputDTensorStructInfo(call, ctx);
     ICHECK(!input_dtensor_sinfos.empty());
     input_dtensor_sinfo = input_dtensor_sinfos[0];

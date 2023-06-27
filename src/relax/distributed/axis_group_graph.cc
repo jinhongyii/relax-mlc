@@ -58,6 +58,9 @@ class BufferAxisGraphExtractor: public StmtExprVisitor {
           }
           std::vector<TIRVarAxis> tir_var_axis_group;
           for(const auto& buffer_axis: buffer_axis_group){
+            if(!inverse_buffer_map.count(buffer_axis.first)){
+              continue;
+            }
             tir_var_axis_group.push_back({inverse_buffer_map[buffer_axis.first], buffer_axis.second});
           }
           tir_var_axis_group_list.push_back(tir_var_axis_group);
@@ -235,15 +238,6 @@ void BuildAxisGraphBinary(const Var& output_var, const Call& call,
         LOG(FATAL)<<"Invalid broadcast, dim0: "<< dim0 <<", dim1: "<<dim1;
       }
     }
-  int n_dim = GetStructInfoAs<TensorStructInfoNode>(var_list[0])->ndim;
-  for(const auto& var: var_list){
-    ICHECK(GetStructInfoAs<TensorStructInfoNode>(var)->ndim == n_dim);
-  }
-  for (int i = 0; i < n_dim;i++){
-    axis_group_graph->JoinAxis({var_list[0].get(), i}, {var_list[2].get(), i}, distributed::AxisGroupGraph::EdgeType::kDescend);
-    axis_group_graph->JoinAxis({var_list[1].get(), i}, {var_list[2].get(), i},
-                               distributed::AxisGroupGraph::EdgeType::kDescend);
-  }
 }
 
 void BuildAxisGraphReduce(const Var& output_var, const Call& call,
@@ -259,7 +253,7 @@ void BuildAxisGraphReduce(const Var& output_var, const Call& call,
       keepdims = attrs->keepdims;
     } else if (const auto* attrs = call->attrs.as<SoftmaxAttrs>()){
       axes = {attrs->axis};
-      keepdims = false;
+      keepdims = true;
     } else {
       LOG(FATAL) << "Unsupported reduce op: " << call->op;
     }
@@ -388,7 +382,7 @@ void BuildAxisGraphReshape(const Var& output_var, const Call& call,
   int j = new_shape_values.size();
   PrimExpr old_shape_product = 1, new_shape_product = 1;
   arith::Analyzer analyzer_;
-  while(i >= 0 && j >= 0){
+  while(i > 0 && j > 0){
     if(analyzer_.CanProve(new_shape_product > old_shape_product)){
         i--;
         old_shape_product *= old_shape_values[i];
@@ -397,7 +391,7 @@ void BuildAxisGraphReshape(const Var& output_var, const Call& call,
         new_shape_product *= new_shape_values[j];
     } else {
         if(i != old_shape_values.size()){
-            axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), j}, distributed::AxisGroupGraph::EdgeType::kDescend);
+          axis_group_graph->JoinAxis({input_var.get(), i}, {output_var.get(), j}, distributed::AxisGroupGraph::EdgeType::kDescend);
         }
         i--;
         j--;
@@ -413,12 +407,13 @@ void BuildAxisGraphCallTIR(const Var& output_var, const Call& call, const tir::P
   Map<tir::Var, Var> tir_var_to_relax_var;
   Array<Expr> var_list = Downcast<Tuple>(call->args[1])->fields;
   var_list.push_back(output_var);
-  for (size_t i = 0; i < static_cast<int>(var_list.size())-1; i++) {
+  for (size_t i = 0; i < static_cast<int>(var_list.size()); i++) {
     if(func->buffer_map.count(func->params[i])){
       tir_var_to_relax_var.Set(func->params[i], Downcast<Var>(var_list[i]));
     }
   }
-  for(const auto& var_axis_group : tir_var_axis_group_list){
+  LOG(INFO) << tir_var_to_relax_var;
+  for (const auto& var_axis_group : tir_var_axis_group_list) {
     int output_idx = -1;
     for(int i=0;i<var_axis_group.size();i++){
       if(tir_var_to_relax_var[var_axis_group[i].first].same_as(output_var)){
