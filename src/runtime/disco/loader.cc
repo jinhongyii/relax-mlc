@@ -45,8 +45,7 @@ class ShardLoaderObj : public Object {
    * \param path_shard_info The path to `shard-info.json`
    * \param slice A method to slice a 3-D tensor at its middle dimension
    */
-  static ObjectRef Create(const std::string& path_metadata, const std::string& path_shard_info,
-                          TypedPackedFunc<void(DLTensor*, int, int, DLTensor*)> slice);
+  static ObjectRef Create(const std::string& path_metadata, const std::string& path_shard_info);
   /*! \brief Load the i-th parameter */
   NDArray Load(int weight_index) const;
   /*! \brief Slice the given tensor at a specific dimension */
@@ -66,8 +65,6 @@ class ShardLoaderObj : public Object {
   NDArrayCacheMetadata metadata_;
   /*! \brief Sharding information for each weight */
   std::vector<ShardInfo> shard_info_;
-  /*! \brief A method to slice a 3-D tensor at its middle dimension */
-  TypedPackedFunc<void(DLTensor*, int, int, DLTensor*)> slice_;
   /*! \brief The current file opened to load weights in it */
   mutable const FileRecord* current_file_;
   /*! \brief The context of the current file to be loaded from */
@@ -96,10 +93,8 @@ inline ShapeTuple ShardShape(const ShapeTuple& shape, int dim, int num_shards) {
 }
 
 ObjectRef ShardLoaderObj::Create(const std::string& path_metadata,
-                                 const std::string& path_shard_info,
-                                 TypedPackedFunc<void(DLTensor*, int, int, DLTensor*)> slice) {
+                                 const std::string& path_shard_info) {
   ObjectPtr<ShardLoaderObj> n = make_object<ShardLoaderObj>();
-  n->slice_ = slice;
   n->metadata_ = NDArrayCacheMetadata::LoadFromFile(path_metadata);
   std::unordered_map<std::string, int> shard_info =
       relax_vm::LoadShardInfoFromFile(path_shard_info);
@@ -151,29 +146,35 @@ std::vector<NDArray> ShardLoaderObj::Shard(NDArray source, int dim, int num_slic
   ShapeTuple dst_shape = ShardShape(src_shape, dim, num_slices);
   Device device = source->device;
   DLDataType dtype = source->dtype;
-  int64_t src_flat[3] = {1, 1, 1};
+  int64_t src_flat[2] = {1, 1};
+  const int64_t* s = src_shape.data();
+  int64_t outer_dim = std::accumulate(&s[0], &s[dim], 1, std::multiplies<int64_t>());
   {
-    const int64_t* s = src_shape.data();
     int ndim = source->ndim;
-    src_flat[0] = std::accumulate(&s[0], &s[dim], 1, std::multiplies<int64_t>());
-    src_flat[1] = s[dim];
-    src_flat[2] = std::accumulate(&s[dim + 1], &s[ndim], 1, std::multiplies<int64_t>());
+    src_flat[0] = s[dim] / num_slices;
+    src_flat[1] = std::accumulate(&s[dim + 1], &s[ndim], 1, std::multiplies<int64_t>());
   }
-  int64_t dst_flat[3] = {src_flat[0], src_flat[1] / num_slices, src_flat[2]};
+  int64_t dst_flat[2] = {src_flat[0], src_flat[1]};
   DLTensor src_tensor = *source.operator->();
   DLTensor dst_tensor = src_tensor;
-  src_tensor.ndim = 3;
+  src_tensor.ndim = 2;
   src_tensor.shape = src_flat;
-  dst_tensor.ndim = 3;
+  dst_tensor.ndim = 2;
   dst_tensor.shape = dst_flat;
   std::vector<NDArray> results;
   results.reserve(num_slices);
+  int64_t old_src_byte_offset = src_tensor.byte_offset;
   for (int i = 0; i < num_slices; ++i) {
     NDArray destination = NDArray::Empty(dst_shape, dtype, device);
     dst_tensor.data = destination->data;
-    ArrayCopyToBytes(&src_tensor, dst_tensor.data,
-                       src_tensor.dtype.bits * dst_flat[1] * dst_flat[2] / 8);
-    src_tensor.byte_offset += src_tensor.dtype.bits * dst_flat[1] * dst_flat[2] / 8;
+    src_tensor.byte_offset = old_src_byte_offset + src_tensor.dtype.bits * src_flat[0] * src_flat[1] * i / 8;
+    int64_t dst_offset = 0;
+    for (int j = 0; j < outer_dim; j++) {
+      ArrayCopyToBytes(&src_tensor, (char*) dst_tensor.data + dst_offset,
+                       src_tensor.dtype.bits * dst_flat[0] * dst_flat[1] / 8);
+      src_tensor.byte_offset += src_tensor.dtype.bits * src_flat[0] * src_flat[1] * num_slices/ 8;
+      dst_offset += dst_tensor.dtype.bits * dst_flat[0] * dst_flat[1] / 8;
+    }
     results.push_back(destination);
   }
   return results;

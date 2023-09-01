@@ -27,7 +27,7 @@ from tvm.runtime import disco as di
 
 
 def test_load_shard():
-    devices = [1, 2]
+    devices = [0, 1]
     param_dict = {
         "x_0": np.random.uniform(size=[64, 128]).astype("float16"),
         "x_1": np.random.uniform(size=[32, 128]).astype("float32"),
@@ -42,11 +42,6 @@ def test_load_shard():
             "shard_dim": 0,
         },
     ]
-
-    @register_func("tests.disco.shard_with_numpy", override=True)
-    def shard_with_numpy(src, start, length, tgt_ndarray):
-        tgt_ndarray.copyfrom(src.numpy()[:, start : start + length, :])
-
     with tempfile.TemporaryDirectory() as path:
         path = "/tmp/tmp_junru/"
         path_ndarray_cache = path + "/ndarray-cache.json"
@@ -60,9 +55,8 @@ def test_load_shard():
 
         loader_create = sess.get_global_func("runtime.disco.ShardLoader")
         loader_load = sess.get_global_func("runtime.disco.ShardLoaderLoad")
-        shard_with_numpy = sess.get_global_func("tests.disco.shard_with_numpy")
 
-        loader = loader_create(path_ndarray_cache, path_shard_info, shard_with_numpy)
+        loader = loader_create(path_ndarray_cache, path_shard_info)
         d_0 = loader_load(loader, 0)
         d_1 = loader_load(loader, 1)
 
