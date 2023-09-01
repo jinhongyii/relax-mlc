@@ -155,7 +155,7 @@ class DRefObj : public Object {
  */
 class DRef : public ObjectRef {
  public:
-  TVM_DEFINE_MUTABLE_NOTNULLABLE_OBJECT_REF_METHODS(DRef, ObjectRef, DRefObj);
+  TVM_DEFINE_MUTABLE_OBJECT_REF_METHODS(DRef, ObjectRef, DRefObj);
 };
 
 /*!
@@ -190,6 +190,16 @@ class SessionObj : public Object {
    * \param remote_array The NDArray on worker-0
    */
   virtual void CopyFromWorker0(const NDArray& host_array, const DRef& remote_array) = 0;
+
+  DRef CopyToWorker0Wrapper(const NDArray& host_array) { 
+    
+    Device dev {DLDeviceType(0), 0};
+    auto func = this->GetGlobalFunc("runtime.disco.empty");
+    DRef dref = this->CallPacked(func, host_array.Shape(), host_array.DataType() ,dev);
+    this->CopyToWorker0(host_array, dref);
+    return dref;
+  }
+
   /*!
    * \brief Copy an NDArray from worker-0 to the controler-side NDArray
    * \param host_array The array to be copied to worker-0
@@ -236,7 +246,7 @@ class Session : public ObjectRef {
  public:
   /*! \brief Create a session backed by a thread pool of workers */
   static Session ThreadedSession(int num_workers);
-  TVM_DEFINE_MUTABLE_NOTNULLABLE_OBJECT_REF_METHODS(Session, ObjectRef, SessionObj);
+  TVM_DEFINE_MUTABLE_OBJECT_REF_METHODS(Session, ObjectRef, SessionObj);
 };
 
 /*!

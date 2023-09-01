@@ -171,7 +171,9 @@ std::vector<NDArray> ShardLoaderObj::Shard(NDArray source, int dim, int num_slic
   for (int i = 0; i < num_slices; ++i) {
     NDArray destination = NDArray::Empty(dst_shape, dtype, device);
     dst_tensor.data = destination->data;
-    this->slice_(&src_tensor, dst_flat[1] * i, dst_flat[1], &dst_tensor);
+    ArrayCopyToBytes(&src_tensor, dst_tensor.data,
+                       src_tensor.dtype.bits * dst_flat[1] * dst_flat[2] / 8);
+    src_tensor.byte_offset += src_tensor.dtype.bits * dst_flat[1] * dst_flat[2] / 8;
     results.push_back(destination);
   }
   return results;
