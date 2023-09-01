@@ -181,7 +181,7 @@ std::vector<NDArray> ShardLoaderObj::Shard(NDArray source, int dim, int num_slic
 }
 
 TVM_REGISTER_GLOBAL("runtime.disco.ShardLoader").set_body_typed(ShardLoaderObj::Create);
-TVM_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoad")
+TVM_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoadIndex")
     .set_body_typed([](ObjectRef loader_obj, int weight_index) {
       const auto* loader = loader_obj.as<ShardLoaderObj>();
       CHECK(loader != nullptr) << "TypeError: Expected ShardLoaderObj, but gets: "
@@ -189,5 +189,15 @@ TVM_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoad")
       return loader->Load(weight_index);
     });
 
+TVM_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoad").set_body_typed([](ObjectRef loader_obj) {
+  const auto* loader = loader_obj.as<ShardLoaderObj>();
+  CHECK(loader != nullptr) << "TypeError: Expected ShardLoaderObj, but gets: "
+                           << loader_obj->GetTypeKey();
+  Array<NDArray> shards;
+  for (int i = 0; i < loader->shard_info_.size(); i++) {
+    shards.push_back(loader->Load(i));
+  }
+  return shards;
+});
 }  // namespace runtime
 }  // namespace tvm

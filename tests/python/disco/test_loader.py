@@ -54,12 +54,34 @@ def test_load_shard():
         sess.init_ccl("nccl", *devices)
 
         loader_create = sess.get_global_func("runtime.disco.ShardLoader")
-        loader_load = sess.get_global_func("runtime.disco.ShardLoaderLoad")
+        loader_load_index = sess.get_global_func("runtime.disco.ShardLoaderLoadIndex")
 
         loader = loader_create(path_ndarray_cache, path_shard_info)
-        d_0 = loader_load(loader, 0)
-        d_1 = loader_load(loader, 1)
+        d_0 = loader_load_index(loader, 0)
+        d_1 = loader_load_index(loader, 1)
 
+        np.testing.assert_equal(
+            param_dict["x_0"][:, 0:64],
+            d_0.debug_get_from_remote(0).numpy(),
+        )
+        np.testing.assert_equal(
+            param_dict["x_0"][:, 64:128],
+            d_0.debug_get_from_remote(1).numpy(),
+        )
+        np.testing.assert_equal(
+            param_dict["x_1"][0:16, :],
+            d_1.debug_get_from_remote(0).numpy(),
+        )
+        np.testing.assert_equal(
+            param_dict["x_1"][16:32, :],
+            d_1.debug_get_from_remote(1).numpy(),
+        )
+        
+        loader_load = sess.get_global_func("runtime.disco.ShardLoaderLoad")
+        tuple_getitem = sess.get_global_func("vm.builtin.tuple_getitem")
+        d = loader_load(loader)
+        d_0 = tuple_getitem(d, 0)
+        d_1 = tuple_getitem(d, 1)
         np.testing.assert_equal(
             param_dict["x_0"][:, 0:64],
             d_0.debug_get_from_remote(0).numpy(),
