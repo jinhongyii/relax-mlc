@@ -206,5 +206,16 @@ TVM_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoad")
       return loader->Load(IntegerFromShapeTuple(weight_index));
     });
 
+TVM_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoadAll").set_body_typed([](ObjectRef loader_obj) {
+  const auto* loader = loader_obj.as<ShardLoaderObj>();
+  CHECK(loader != nullptr) << "TypeError: Expected ShardLoaderObj, but gets: "
+                           << loader_obj->GetTypeKey();
+  Array<NDArray> shards;
+  for (int i = 0; i < loader->shard_info_.size(); i++) {
+    shards.push_back(loader->Load(i));
+  }
+  return shards;
+});
+
 }  // namespace runtime
 }  // namespace tvm
