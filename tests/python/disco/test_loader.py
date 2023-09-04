@@ -23,7 +23,6 @@ import numpy as np
 
 from tvm import dlight as dl
 from tvm import relax as rx
-from tvm._ffi import register_func
 from tvm.contrib import tvmjs
 from tvm.runtime import ShapeTuple
 from tvm.runtime import disco as di
@@ -32,18 +31,11 @@ from tvm.script import relax as R
 from tvm.target import Target
 
 
-@register_func("tests.disco.shard_with_numpy", override=True)
-def _shard_with_numpy(src, num_shards, tgt):
-    s_0, s_1, s_2 = src.shape
-    tgt.copyfrom(src.numpy().reshape(s_0, num_shards, s_1 // num_shards, s_2).transpose(1, 0, 2, 3))
-
-
 def _create_loader(sess, path, param_dict, shard_info):
     path_ndarray_cache = path + "/ndarray-cache.json"
     tvmjs.dump_ndarray_cache(param_dict, path, encode_format="raw")
     with open(path_ndarray_cache, "r", encoding="utf-8") as i_f:
         ndarray_cache = i_f.read()
-    shard_with_numpy = sess.get_global_func("tests.disco.shard_with_numpy")
     loader_create = sess.get_global_func("runtime.disco.ShardLoader")
     loader = loader_create(path_ndarray_cache, ndarray_cache, shard_info, None)
     return loader
