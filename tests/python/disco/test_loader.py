@@ -50,7 +50,7 @@ def _create_loader(sess, path, param_dict, shard_info):
 
 
 def test_load_shard():
-    devices = [1, 2]
+    devices = [0, 1]
     param_dict = {
         "x_0": np.random.uniform(size=[64, 128]).astype("float16"),
         "x_1": np.random.uniform(size=[32, 128]).astype("float32"),
@@ -87,7 +87,7 @@ def test_load_shard():
 
 
 def test_load_shard_in_relax():
-    devices = [1, 2]
+    devices = [0, 1]
     param_dict = {
         "x_0": np.random.uniform(size=[64, 128]).astype("float16"),
         "x_1": np.random.uniform(size=[32, 128]).astype("float32"),
