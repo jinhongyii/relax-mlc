@@ -43,7 +43,7 @@ class ShardLoaderObj : public Object {
   /*! \brief Create a shard loader. */
   static ObjectRef Create(const std::string& path_to_metadata, const std::string& metadata,
                           const std::string& shard_info,
-                          TypedPackedFunc<void(DLTensor*, int, DLTensor*)> f_shard);
+                          Optional<PackedFunc> f_shard);
   /*! \brief Load the i-th parameter */
   NDArray Load(int weight_index) const;
   /*! \brief Slice the given tensor at a specific dimension */
@@ -64,7 +64,7 @@ class ShardLoaderObj : public Object {
   /*! \brief Sharding information for each weight */
   std::vector<ShardInfo> shard_info_;
   /*! \brief A method to slice a 3-D tensor */
-  TypedPackedFunc<void(DLTensor*, int, DLTensor*)> f_shard_;
+  Optional<PackedFunc> f_shard_;
   /*! \brief The current file opened to load weights in it */
   mutable const FileRecord* current_file_;
   /*! \brief The context of the current file to be loaded from */
@@ -95,7 +95,7 @@ inline std::vector<ShapeTuple::index_type> ShardShape(const ShapeTuple& shape, i
 
 ObjectRef ShardLoaderObj::Create(const std::string& path_to_metadata, const std::string& metadata,
                                  const std::string& shard_info,
-                                 TypedPackedFunc<void(DLTensor*, int, DLTensor*)> f_shard) {
+                                 Optional<PackedFunc> f_shard) {
   ObjectPtr<ShardLoaderObj> n = make_object<ShardLoaderObj>();
   n->f_shard_ = f_shard;
   n->metadata_ = NDArrayCacheMetadata::LoadFromStr(metadata, path_to_metadata);
@@ -174,7 +174,26 @@ NDArray ShardLoaderObj::Shard(NDArray source, int dim, int num_slices) const {
   dst_tensor.ndim = 4;
   dst_tensor.shape = dst_flat;
   // Copy slices using the API
-  this->f_shard_(&src_tensor, num_slices, &dst_tensor);
+  if (this->f_shard_.defined()){
+    this->f_shard_.value()(&src_tensor, num_slices, &dst_tensor);
+  } else {
+    DLTensor src_sub_tensor = *source.operator->();
+    src_sub_tensor.ndim = 2;
+    src_sub_tensor.shape = dst_flat + 2;
+
+    int64_t old_src_byte_offset = src_sub_tensor.byte_offset;
+    int64_t dst_offset = 0;
+    for (int i = 0; i < num_slices; ++i) {
+      dst_tensor.data = destination->data;
+      src_sub_tensor.byte_offset = old_src_byte_offset + src_sub_tensor.dtype.bits * dst_flat[2] * dst_flat[3] * i / 8;
+      for (int j = 0; j < dst_flat[1]; j++) {
+        ArrayCopyToBytes(&src_sub_tensor, (char*) dst_tensor.data + dst_offset,
+                        src_sub_tensor.dtype.bits * dst_flat[2] * dst_flat[3] / 8);
+        src_sub_tensor.byte_offset += src_sub_tensor.dtype.bits * src_flat[1] * src_flat[2]/ 8;
+        dst_offset += dst_tensor.dtype.bits * dst_flat[2] * dst_flat[3] / 8;
+      }
+    }
+  }
   return destination;
 }
 

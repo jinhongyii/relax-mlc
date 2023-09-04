@@ -155,7 +155,7 @@ class DRefObj : public Object {
  */
 class DRef : public ObjectRef {
  public:
-  TVM_DEFINE_MUTABLE_NOTNULLABLE_OBJECT_REF_METHODS(DRef, ObjectRef, DRefObj);
+  TVM_DEFINE_MUTABLE_OBJECT_REF_METHODS(DRef, ObjectRef, DRefObj);
 };
 
 /*!
