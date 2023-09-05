@@ -152,6 +152,8 @@ NDArray ShardLoaderObj::Load(int weight_index) const {
     if(shard_dim != -1){
       send = this->Shard(param->Load(device, &this->current_file_stream_, f_load), shard_dim,
                         num_shards);
+    } else {
+      send = param->Load(device, &this->current_file_stream_, f_load);
     }
   }
   if(shard_dim != -1){
