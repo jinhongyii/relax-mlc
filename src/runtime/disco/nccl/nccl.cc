@@ -105,6 +105,7 @@ NDArray AllReduce(NDArray send, ReduceKind reduce_kind) {
   NCCL_CALL(ncclAllReduce(send->data, recv->data, numel,
                           /*datatype=*/AsNCCLDataType(DataType(send->dtype)),
                           /*op=*/AsNCCLRedOp(reduce_kind), ctx->comm, ctx->stream));
+  cudaStreamSynchronize(ctx->stream);
   return recv;
 }
 
@@ -115,6 +116,7 @@ NDArray BroadcastFromWorker0(NDArray buffer) {
   NCCL_CALL(ncclBroadcast(buffer->data, buffer->data, numel,
                           /*datatype=*/AsNCCLDataType(DataType(buffer->dtype)),
                           /*root=*/0, ctx->comm, ctx->stream));
+  cudaStreamSynchronize(ctx->stream);
   return buffer;
 }
 
@@ -156,6 +158,7 @@ void ScatterFromWorker0(Optional<NDArray> send, NDArray recv) {
   DataType dtype(recv->dtype);
   NCCL_CALL(ncclRecv(recv->data, numel, AsNCCLDataType(dtype), 0, ctx->comm, ctx->stream));
   NCCL_CALL(ncclGroupEnd());
+  cudaStreamSynchronize(ctx->stream);
 }
 
 void RecvFromWorker0(NDArray buffer) {
@@ -166,6 +169,7 @@ void RecvFromWorker0(NDArray buffer) {
   NCCL_CALL(ncclRecv(buffer->data, buffer.Shape()->Product(), AsNCCLDataType(buffer.DataType()), 0,
                      ctx->comm, ctx->stream));
   NCCL_CALL(ncclGroupEnd());
+  cudaStreamSynchronize(ctx->stream);
 }
 
 TVM_REGISTER_GLOBAL("runtime.disco.nccl.init_ccl")
