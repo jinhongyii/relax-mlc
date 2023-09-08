@@ -21,6 +21,7 @@ import tempfile
 import numpy as np
 
 import tvm
+import tvm.testing
 from tvm import dlight as dl
 from tvm import relax as rx
 from tvm.runtime import disco as di
@@ -54,8 +55,9 @@ def test_allreduce():
         ("max", np.maximum),
         ("avg", lambda a, b: (a + b) * 0.5),
     ]:
-        result = sess.allreduce(d_array, op=op)
-        result = result.debug_get_from_remote(0).numpy()
+        dst_array = sess.empty((3, 4), "float32")
+        sess.allreduce(d_array, dst_array, op=op)
+        result = dst_array.debug_get_from_remote(0).numpy()
         expected = np_op(array_1, array_2)
         np.testing.assert_equal(result, expected)
 
@@ -69,8 +71,9 @@ def test_broadcast_from_worker0():
     sess.init_ccl("nccl", *devices)
     d_array = sess.empty((3, 4), "float32")
     d_array.debug_copy_from(0, array)
-    sess.broadcast_from_worker0(d_array)
-    result = d_array.debug_get_from_remote(1).numpy()
+    dst_array = sess.empty((3, 4), "float32")
+    sess.broadcast_from_worker0(d_array, dst_array)
+    result = dst_array.debug_get_from_remote(1).numpy()
     np.testing.assert_equal(result, array)
 
 
@@ -354,9 +357,5 @@ def test_attention():  # pylint: disable=too-many-locals
 
 
 if __name__ == "__main__":
-    test_init()
-    test_broadcast_from_worker0()
-    test_allreduce()
-    test_scatter()
-    test_mlp()
-    test_attention()
+    tvm.testing.main()
+
