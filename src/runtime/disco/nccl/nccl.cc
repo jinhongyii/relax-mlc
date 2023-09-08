@@ -94,17 +94,18 @@ void InitCCL(const std::vector<int>& device_ids) {
   ctx->device_id = device_id;
   ctx->comm = NCCLGlobalContext::Get()->communicators[worker->worker_id];
   CUDA_CALL(cudaStreamCreate(&ctx->stream));
-  DeviceAPI::Get(device)->SetStream(device, ctx->stream);
 }
 
 void AllReduce(NDArray send, ReduceKind reduce_kind, NDArray recv) {
   NCCLThreadLocalContext* ctx = NCCLThreadLocalContext::Get();
   ShapeTuple shape = send.Shape();
   int64_t numel = shape->Product();
+  Device device = ctx->worker->default_device;
+  DeviceAPI::Get(device)->SyncStreamFromTo(device, nullptr, ctx->stream);
   NCCL_CALL(ncclAllReduce(send->data, recv->data, numel,
                           /*datatype=*/AsNCCLDataType(DataType(send->dtype)),
                           /*op=*/AsNCCLRedOp(reduce_kind), ctx->comm, ctx->stream));
-  cudaStreamSynchronize(ctx->stream);
+  DeviceAPI::Get(device)->SyncStreamFromTo(device, ctx->stream, nullptr);
 }
 
 void BroadcastFromWorker0(NDArray send, NDArray recv) {
@@ -112,10 +113,12 @@ void BroadcastFromWorker0(NDArray send, NDArray recv) {
   ICHECK(send.Shape()->Product() == recv.Shape()->Product());
   ShapeTuple shape = send.Shape();
   int64_t numel = shape->Product();
+  Device device = ctx->worker->default_device;
+  DeviceAPI::Get(device)->SyncStreamFromTo(device, nullptr, ctx->stream);
   NCCL_CALL(ncclBroadcast(send->data, recv->data, numel,
                           /*datatype=*/AsNCCLDataType(DataType(send->dtype)),
                           /*root=*/0, ctx->comm, ctx->stream));
-  cudaStreamSynchronize(ctx->stream);
+  DeviceAPI::Get(device)->SyncStreamFromTo(device, ctx->stream, nullptr);
 }
 
 void ScatterFromWorker0(Optional<NDArray> send, NDArray recv) {
@@ -123,6 +126,8 @@ void ScatterFromWorker0(Optional<NDArray> send, NDArray recv) {
   NCCLThreadLocalContext* ctx = NCCLThreadLocalContext::Get();
   int worker_id = ctx->worker->worker_id;
   int num_workers = ctx->worker->num_workers;
+  Device device = ctx->worker->default_device;
+  DeviceAPI::Get(device)->SyncStreamFromTo(device, nullptr, ctx->stream);
   if (worker_id == 0) {
     CHECK(send.defined()) << "ValueError: buffer `send` must be provided when worker_id == 0.";
     NDArray buffer = send.value();
@@ -156,18 +161,20 @@ void ScatterFromWorker0(Optional<NDArray> send, NDArray recv) {
   DataType dtype(recv->dtype);
   NCCL_CALL(ncclRecv(recv->data, numel, AsNCCLDataType(dtype), 0, ctx->comm, ctx->stream));
   NCCL_CALL(ncclGroupEnd());
-  cudaStreamSynchronize(ctx->stream);
+  DeviceAPI::Get(device)->SyncStreamFromTo(device, ctx->stream, nullptr);
 }
 
 void RecvFromWorker0(NDArray buffer) {
   NCCLThreadLocalContext* ctx = NCCLThreadLocalContext::Get();
   CHECK_NE(ctx->worker->worker_id, 0)
       << "ValueError: Worker 0 is not allowed to call RecvFromWorker0.";
+  Device device = ctx->worker->default_device;
+  DeviceAPI::Get(device)->SyncStreamFromTo(device, nullptr, ctx->stream);
   NCCL_CALL(ncclGroupStart());
   NCCL_CALL(ncclRecv(buffer->data, buffer.Shape()->Product(), AsNCCLDataType(buffer.DataType()), 0,
                      ctx->comm, ctx->stream));
   NCCL_CALL(ncclGroupEnd());
-  cudaStreamSynchronize(ctx->stream);
+  DeviceAPI::Get(device)->SyncStreamFromTo(device, ctx->stream, nullptr);
 }
 
 TVM_REGISTER_GLOBAL("runtime.disco.nccl.init_ccl")
