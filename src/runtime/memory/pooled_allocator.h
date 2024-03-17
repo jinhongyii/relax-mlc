@@ -36,7 +36,7 @@ namespace tvm {
 namespace runtime {
 namespace memory {
 
-class PooledAllocator final : public Allocator {
+class PooledAllocator : public Allocator {
  public:
   static constexpr size_t kDefaultPageSize = 4096;
 
@@ -45,7 +45,7 @@ class PooledAllocator final : public Allocator {
 
   ~PooledAllocator() { ReleaseAll(); }
 
-  Buffer Alloc(size_t nbytes, size_t alignment, DLDataType type_hint) override {
+   virtual Buffer Alloc(size_t nbytes, size_t alignment, DLDataType type_hint) override {
     std::lock_guard<std::recursive_mutex> lock(mu_);
     size_t size = ((nbytes + page_size_ - 1) / page_size_) * page_size_;
     auto&& it = memory_pool_.find(size);
@@ -73,7 +73,7 @@ class PooledAllocator final : public Allocator {
     return buf;
   }
 
-  Buffer Alloc(ShapeTuple shape, DLDataType type_hint, const std::string& mem_scope) override {
+  virtual Buffer Alloc(ShapeTuple shape, DLDataType type_hint, const std::string& mem_scope) override {
     if (mem_scope.empty() || mem_scope == "global") {
       return Allocator::Alloc(device_, shape, type_hint, mem_scope);
     }
@@ -94,8 +94,8 @@ class PooledAllocator final : public Allocator {
 
   size_t UsedMemory() const override { return used_memory_.load(std::memory_order_relaxed); }
 
- private:
-  void ReleaseAll() {
+ protected:
+  virtual void ReleaseAll() {
     std::lock_guard<std::recursive_mutex> lock(mu_);
     for (auto const& it : memory_pool_) {
       auto const& pool = it.second;
@@ -108,7 +108,7 @@ class PooledAllocator final : public Allocator {
     VLOG(1) << "release all buffers";
   }
 
- private:
+ protected:
   size_t page_size_;
   std::atomic<size_t> used_memory_;
   std::unordered_map<size_t, std::vector<Buffer>> memory_pool_;
