@@ -414,7 +414,9 @@ void customAllReduceInternal(AllReduceParams& params, void* data, size_t elts, s
 inline int TensorSize(const DLTensor* tensor){
   int size = 1;
   for(int i = tensor->ndim - 1; i >= 0; --i){
-    ICHECK(tensor->strides[i] == size);
+    if(tensor->strides){
+        ICHECK(tensor->strides[i] == size);
+    }
     size *= tensor->shape[i];
   }
   return size;

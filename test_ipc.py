@@ -39,11 +39,11 @@ class AllReduce:  # pylint: disable=too-few-public-methods
         with R.dataflow():
             x: R.Tensor((128, 128), "float32") = R.ccl.broadcast_from_worker0(x)
             send = R.call_packed("cuda_ipc.alloc_storage", R.shape((128, 128)), "float32", sinfo_args=R.Object())
-            send = R.call_packed("vm.builtin.alloc_tensor", 0, R.shape((128, 128)), "float32", sinfo_args=R.Tensor((128, 128), "float32"))
+            send = R.call_packed("vm.builtin.alloc_tensor", send, 0, R.shape((128, 128)), "float32", sinfo_args=R.Tensor((128, 128), "float32"))
             barrier_in = R.call_packed("cuda_ipc.alloc_storage", R.shape((128, 128)), "float32", sinfo_args=R.Object())
-            barrier_in = R.call_packed("vm.builtin.alloc_tensor", 0, R.shape((128, 128)), "float32", sinfo_args=R.Tensor((128, 128), "float32"))
+            barrier_in = R.call_packed("vm.builtin.alloc_tensor", barrier_in, 0, R.shape((128, 128)), "float32", sinfo_args=R.Tensor((128, 128), "float32"))
             barrier_out = R.call_packed("cuda_ipc.alloc_storage", R.shape((128, 128)), "float32", sinfo_args=R.Object())
-            barrier_out = R.call_packed("vm.builtin.alloc_tensor", 0, R.shape((128, 128)), "float32", sinfo_args=R.Tensor((128, 128), "float32"))
+            barrier_out = R.call_packed("vm.builtin.alloc_tensor", barrier_out, 0, R.shape((128, 128)), "float32", sinfo_args=R.Tensor((128, 128), "float32"))
             send = R.call_tir_inplace(cls.add_one, (x, send), inplace_indices=1, out_sinfo=R.Tensor((128, 128), "float32"))
             out = R.call_dps_packed("cuda_ipc.custom_allreduce", (send, barrier_in, barrier_out), out_sinfo=R.Tensor((128, 128), "float32"))
             R.output(out)
@@ -71,7 +71,6 @@ def relax_build(mod, target):
             dl.gpu.GeneralReduction(),
             dl.gpu.Fallback(),
         )(mod)
-        print(mod)
         return rx.build(mod, target=target)
     
 with tempfile.TemporaryDirectory() as tmpdir:
